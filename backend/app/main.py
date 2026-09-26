@@ -1,5 +1,8 @@
+from datetime import datetime
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from sqlalchemy import text
 
 from app.database import engine
@@ -22,6 +25,26 @@ app.add_middleware(
 )
 
 
+# ============================================================
+# AI ALERT DATA MODEL
+# ============================================================
+
+class AIAlert(BaseModel):
+    machine_id: int
+    sensor_type: str
+    alert_type: str
+    severity: str
+    message: str
+    value: float | None = None
+    unit: str | None = None
+    created_at: datetime
+    resolved: bool = False
+
+
+# ============================================================
+# HEALTH CHECK
+# ============================================================
+
 @app.get("/api/health")
 def health_check():
     return {
@@ -29,6 +52,10 @@ def health_check():
         "message": "Manufacturing AI backend is running",
     }
 
+
+# ============================================================
+# MACHINES
+# ============================================================
 
 @app.get("/api/machines")
 def get_machines():
@@ -59,6 +86,10 @@ def get_machines():
 
         return machines
 
+
+# ============================================================
+# SENSORS
+# ============================================================
 
 @app.get("/api/sensors")
 def get_sensors():
@@ -97,6 +128,10 @@ def get_sensors():
 
         return sensors
 
+
+# ============================================================
+# ALERTS
+# ============================================================
 
 @app.get("/api/alerts")
 def get_alerts():
@@ -147,6 +182,10 @@ def get_alerts():
 
         return alerts
 
+
+# ============================================================
+# ANALYTICS
+# ============================================================
 
 @app.get("/api/analytics")
 def get_analytics():
@@ -347,3 +386,85 @@ def get_analytics():
 
             "machines": machines,
         }
+
+
+# ============================================================
+# AI ALERT INSERTION
+# ============================================================
+
+@app.post("/api/ai-alerts")
+def create_ai_alerts(alerts: list[AIAlert]):
+    inserted = 0
+    skipped = 0
+
+    with engine.begin() as connection:
+
+        for alert in alerts:
+
+            # Prevent duplicate alerts
+            existing = connection.execute(
+                text("""
+                    SELECT 1
+                    FROM alerts
+                    WHERE machine_id = :machine_id
+                      AND alert_type = :alert_type
+                      AND created_at = :created_at
+                    LIMIT 1
+                """),
+                {
+                    "machine_id": alert.machine_id,
+                    "alert_type": alert.alert_type,
+                    "created_at": alert.created_at,
+                },
+            ).first()
+
+            if existing:
+                skipped += 1
+                continue
+
+            # Insert new AI alert
+            connection.execute(
+                text("""
+                    INSERT INTO alerts (
+                        machine_id,
+                        sensor_type,
+                        alert_type,
+                        severity,
+                        message,
+                        value,
+                        unit,
+                        created_at,
+                        resolved
+                    )
+                    VALUES (
+                        :machine_id,
+                        :sensor_type,
+                        :alert_type,
+                        :severity,
+                        :message,
+                        :value,
+                        :unit,
+                        :created_at,
+                        :resolved
+                    )
+                """),
+                {
+                    "machine_id": alert.machine_id,
+                    "sensor_type": alert.sensor_type,
+                    "alert_type": alert.alert_type,
+                    "severity": alert.severity,
+                    "message": alert.message,
+                    "value": alert.value,
+                    "unit": alert.unit,
+                    "created_at": alert.created_at,
+                    "resolved": alert.resolved,
+                },
+            )
+
+            inserted += 1
+
+    return {
+        "status": "ok",
+        "inserted": inserted,
+        "skipped": skipped,
+    }
