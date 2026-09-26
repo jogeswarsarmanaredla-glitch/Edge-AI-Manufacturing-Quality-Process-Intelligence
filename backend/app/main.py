@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import subprocess
 
 from fastapi import FastAPI
@@ -10,6 +10,10 @@ from app.database import engine
 
 
 app = FastAPI(title="Manufacturing AI API")
+
+# Prevent repeated AI alerts for the same machine
+# inside this cooldown window.
+AI_ALERT_COOLDOWN_SECONDS = 60
 
 
 origins = [
@@ -402,8 +406,11 @@ def create_ai_alerts(alerts: list[AIAlert]):
 
         for alert in alerts:
 
-            # Prevent duplicate alerts
-            existing = connection.execute(
+            # ------------------------------------------------
+            # 1. Exact duplicate protection
+            # ------------------------------------------------
+
+            existing_exact = connection.execute(
                 text("""
                     SELECT 1
                     FROM alerts
@@ -419,11 +426,51 @@ def create_ai_alerts(alerts: list[AIAlert]):
                 },
             ).first()
 
-            if existing:
+            if existing_exact:
                 skipped += 1
                 continue
 
-            # Insert new AI alert
+            # ------------------------------------------------
+            # 2. AI cooldown protection
+            #
+            # If this machine already received an AI alert
+            # during the previous 60 seconds, do not create
+            # another one.
+            # ------------------------------------------------
+
+            cooldown_start = (
+                alert.created_at
+                - timedelta(
+                    seconds=AI_ALERT_COOLDOWN_SECONDS
+                )
+            )
+
+            recent_ai_alert = connection.execute(
+                text("""
+                    SELECT 1
+                    FROM alerts
+                    WHERE machine_id = :machine_id
+                      AND alert_type = 'AI Anomaly'
+                      AND created_at >= :cooldown_start
+                      AND created_at < :created_at
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """),
+                {
+                    "machine_id": alert.machine_id,
+                    "cooldown_start": cooldown_start,
+                    "created_at": alert.created_at,
+                },
+            ).first()
+
+            if recent_ai_alert:
+                skipped += 1
+                continue
+
+            # ------------------------------------------------
+            # 3. Insert new AI alert
+            # ------------------------------------------------
+
             connection.execute(
                 text("""
                     INSERT INTO alerts (
@@ -468,6 +515,7 @@ def create_ai_alerts(alerts: list[AIAlert]):
         "status": "ok",
         "inserted": inserted,
         "skipped": skipped,
+        "cooldown_seconds": AI_ALERT_COOLDOWN_SECONDS,
     }
 
 
@@ -577,7 +625,9 @@ def run_ai_analysis():
             "anomalies_detected": 0,
             "anomalies": [],
         }
-    # ============================================================
+
+
+# ============================================================
 # SENSOR SIMULATION
 # ============================================================
 
@@ -590,11 +640,16 @@ class SimulatedSensorReading(BaseModel):
 
 
 @app.post("/api/simulate-sensor")
-def simulate_sensor(reading: SimulatedSensorReading):
+def simulate_sensor(
+    reading: SimulatedSensorReading
+):
 
     with engine.begin() as connection:
 
+        # ------------------------------------------------
         # Check that the machine exists
+        # ------------------------------------------------
+
         machine_exists = connection.execute(
             text("""
                 SELECT 1
@@ -611,11 +666,15 @@ def simulate_sensor(reading: SimulatedSensorReading):
             return {
                 "status": "error",
                 "message": (
-                    f"Machine {reading.machine_id} does not exist."
+                    f"Machine {reading.machine_id} "
+                    "does not exist."
                 ),
             }
 
-        # Insert Temperature
+        # ------------------------------------------------
+        # Temperature
+        # ------------------------------------------------
+
         connection.execute(
             text("""
                 INSERT INTO sensors (
@@ -640,7 +699,10 @@ def simulate_sensor(reading: SimulatedSensorReading):
             },
         )
 
-        # Insert Vibration
+        # ------------------------------------------------
+        # Vibration
+        # ------------------------------------------------
+
         connection.execute(
             text("""
                 INSERT INTO sensors (
@@ -665,7 +727,10 @@ def simulate_sensor(reading: SimulatedSensorReading):
             },
         )
 
-        # Insert Pressure
+        # ------------------------------------------------
+        # Pressure
+        # ------------------------------------------------
+
         connection.execute(
             text("""
                 INSERT INTO sensors (
