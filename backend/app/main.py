@@ -1,4 +1,5 @@
 from datetime import datetime
+import subprocess
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -468,3 +469,56 @@ def create_ai_alerts(alerts: list[AIAlert]):
         "inserted": inserted,
         "skipped": skipped,
     }
+
+
+# ============================================================
+# RUN AI ANALYSIS
+# ============================================================
+
+@app.post("/api/ai/analyze")
+def run_ai_analysis():
+    command = (
+        "source /home/jogesh-3339/.mlvenv/bin/activate && "
+        "cd /mnt/c/ManufacturingAI/backend && "
+        "python app/ml/anomaly.py"
+    )
+
+    try:
+        result = subprocess.run(
+            [
+                "wsl",
+                "bash",
+                "-lc",
+                command,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        if result.returncode != 0:
+            return {
+                "status": "error",
+                "message": "AI analysis failed",
+                "output": result.stdout,
+                "error": result.stderr,
+            }
+
+        return {
+            "status": "ok",
+            "message": "AI analysis completed successfully",
+            "output": result.stdout,
+        }
+
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "message": "AI analysis timed out",
+        }
+
+    except Exception as error:
+        return {
+            "status": "error",
+            "message": "Failed to start AI analysis",
+            "error": str(error),
+        }
