@@ -577,3 +577,125 @@ def run_ai_analysis():
             "anomalies_detected": 0,
             "anomalies": [],
         }
+    # ============================================================
+# SENSOR SIMULATION
+# ============================================================
+
+class SimulatedSensorReading(BaseModel):
+    machine_id: int
+    temperature: float
+    vibration: float
+    pressure: float
+    recorded_at: datetime
+
+
+@app.post("/api/simulate-sensor")
+def simulate_sensor(reading: SimulatedSensorReading):
+
+    with engine.begin() as connection:
+
+        # Check that the machine exists
+        machine_exists = connection.execute(
+            text("""
+                SELECT 1
+                FROM machines
+                WHERE id = :machine_id
+                LIMIT 1
+            """),
+            {
+                "machine_id": reading.machine_id,
+            },
+        ).first()
+
+        if not machine_exists:
+            return {
+                "status": "error",
+                "message": (
+                    f"Machine {reading.machine_id} does not exist."
+                ),
+            }
+
+        # Insert Temperature
+        connection.execute(
+            text("""
+                INSERT INTO sensors (
+                    machine_id,
+                    sensor_type,
+                    value,
+                    unit,
+                    recorded_at
+                )
+                VALUES (
+                    :machine_id,
+                    'Temperature',
+                    :value,
+                    '°C',
+                    :recorded_at
+                )
+            """),
+            {
+                "machine_id": reading.machine_id,
+                "value": reading.temperature,
+                "recorded_at": reading.recorded_at,
+            },
+        )
+
+        # Insert Vibration
+        connection.execute(
+            text("""
+                INSERT INTO sensors (
+                    machine_id,
+                    sensor_type,
+                    value,
+                    unit,
+                    recorded_at
+                )
+                VALUES (
+                    :machine_id,
+                    'Vibration',
+                    :value,
+                    'mm/s',
+                    :recorded_at
+                )
+            """),
+            {
+                "machine_id": reading.machine_id,
+                "value": reading.vibration,
+                "recorded_at": reading.recorded_at,
+            },
+        )
+
+        # Insert Pressure
+        connection.execute(
+            text("""
+                INSERT INTO sensors (
+                    machine_id,
+                    sensor_type,
+                    value,
+                    unit,
+                    recorded_at
+                )
+                VALUES (
+                    :machine_id,
+                    'Pressure',
+                    :value,
+                    'bar',
+                    :recorded_at
+                )
+            """),
+            {
+                "machine_id": reading.machine_id,
+                "value": reading.pressure,
+                "recorded_at": reading.recorded_at,
+            },
+        )
+
+    return {
+        "status": "ok",
+        "message": "Sensor reading stored successfully",
+        "machine_id": reading.machine_id,
+        "temperature": reading.temperature,
+        "vibration": reading.vibration,
+        "pressure": reading.pressure,
+        "recorded_at": reading.recorded_at.isoformat(),
+    }
