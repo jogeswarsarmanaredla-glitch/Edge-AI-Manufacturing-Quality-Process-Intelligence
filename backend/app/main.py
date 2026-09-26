@@ -496,24 +496,77 @@ def run_ai_analysis():
             timeout=120,
         )
 
+        # AI process failed
         if result.returncode != 0:
             return {
                 "status": "error",
                 "message": "AI analysis failed",
                 "output": result.stdout,
                 "error": result.stderr,
+                "anomalies_detected": 0,
+                "anomalies": [],
             }
+
+        # ----------------------------------------------------
+        # Read AI anomaly alerts from PostgreSQL
+        # ----------------------------------------------------
+
+        with engine.connect() as connection:
+            ai_results = connection.execute(
+                text("""
+                    SELECT
+                        id,
+                        machine_id,
+                        sensor_type,
+                        severity,
+                        message,
+                        value,
+                        unit,
+                        created_at
+                    FROM alerts
+                    WHERE alert_type = 'AI Anomaly'
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 10
+                """)
+            ).mappings().all()
+
+        anomalies = []
+
+        for row in ai_results:
+            anomalies.append(
+                {
+                    "id": row["id"],
+                    "machine_id": row["machine_id"],
+                    "sensor_type": row["sensor_type"],
+                    "severity": row["severity"],
+                    "message": row["message"],
+                    "anomaly_score": (
+                        float(row["value"])
+                        if row["value"] is not None
+                        else None
+                    ),
+                    "created_at": (
+                        row["created_at"].isoformat()
+                        if row["created_at"] is not None
+                        else None
+                    ),
+                }
+            )
 
         return {
             "status": "ok",
             "message": "AI analysis completed successfully",
             "output": result.stdout,
+            "anomalies_detected": len(anomalies),
+            "anomalies": anomalies,
         }
 
     except subprocess.TimeoutExpired:
         return {
             "status": "error",
             "message": "AI analysis timed out",
+            "anomalies_detected": 0,
+            "anomalies": [],
         }
 
     except Exception as error:
@@ -521,4 +574,6 @@ def run_ai_analysis():
             "status": "error",
             "message": "Failed to start AI analysis",
             "error": str(error),
+            "anomalies_detected": 0,
+            "anomalies": [],
         }

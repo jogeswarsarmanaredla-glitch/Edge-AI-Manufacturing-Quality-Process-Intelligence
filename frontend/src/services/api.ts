@@ -49,3 +49,15 @@ export async function getAnalytics() {
 
   return response.json();
 }
+
+export async function runAIAnalysis() {
+  const response = await fetch(`${API_BASE_URL}/api/ai/analyze`, {
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to run AI analysis");
+  }
+
+  return response.json();
+}
