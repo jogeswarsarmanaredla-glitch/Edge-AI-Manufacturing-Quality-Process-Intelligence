@@ -1,0 +1,31 @@
+# Secrets
+backend/.env
+
+# Python virtual environments
+backend/.venv/
+backend/.mlvenv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Generated ML/data files
+backend/sensors.csv
+backend/ai_alerts.csv
+
+# Node / React
+frontend/node_modules/
+frontend/dist/
+
+# Nested Git metadata
+frontend/.git/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# VS Code local settings
+.vscode/
