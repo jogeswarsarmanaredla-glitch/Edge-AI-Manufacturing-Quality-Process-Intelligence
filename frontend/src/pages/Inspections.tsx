@@ -40,6 +40,13 @@ type Inspection = {
   confidence: number | null;
   defect_count: number;
   defect_details: string | null;
+
+  health_score_at_inspection: number | null;
+  temperature_at_inspection: number | null;
+  pressure_at_inspection: number | null;
+  vibration_at_inspection: number | null;
+  anomaly_status_at_inspection: string | null;
+
   created_at: string | null;
 };
 
@@ -577,11 +584,12 @@ function Inspections() {
           {/* Submit */}
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-xs leading-5 text-slate-500">
-              The current pipeline records the inspection as
+              The inspection is stored as
               <span className="text-slate-300">
                 {" "}Pending
               </span>
-              until a computer-vision model is connected.
+              until a computer-vision model is connected. The current
+              machine health and sensor condition are captured with it.
             </p>
 
             <button
@@ -697,7 +705,96 @@ function Inspections() {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-4 text-xs sm:grid-cols-3">
+                      <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4 lg:grid-cols-8">
+                        <div>
+                          <p className="text-slate-500">
+                            Health
+                          </p>
+
+                          <p className="mt-1 font-medium text-slate-300">
+                            {inspection.health_score_at_inspection !==
+                            null &&
+                            inspection.health_score_at_inspection !==
+                              undefined
+                              ? `${inspection.health_score_at_inspection.toFixed(
+                                  1
+                                )}%`
+                              : "—"}
+                          </p>
+                        </div>
+
+                        <div>
+                          <p className="text-slate-500">
+                            Temp
+                          </p>
+
+                          <p className="mt-1 font-medium text-slate-300">
+                            {inspection.temperature_at_inspection !==
+                            null &&
+                            inspection.temperature_at_inspection !==
+                              undefined
+                              ? `${inspection.temperature_at_inspection.toFixed(
+                                  1
+                                )} °C`
+                              : "—"}
+                          </p>
+                        </div>
+
+                        <div>
+                          <p className="text-slate-500">
+                            Pressure
+                          </p>
+
+                          <p className="mt-1 font-medium text-slate-300">
+                            {inspection.pressure_at_inspection !==
+                            null &&
+                            inspection.pressure_at_inspection !==
+                              undefined
+                              ? `${inspection.pressure_at_inspection.toFixed(
+                                  2
+                                )} bar`
+                              : "—"}
+                          </p>
+                        </div>
+
+                        <div>
+                          <p className="text-slate-500">
+                            Vibration
+                          </p>
+
+                          <p className="mt-1 font-medium text-slate-300">
+                            {inspection.vibration_at_inspection !==
+                            null &&
+                            inspection.vibration_at_inspection !==
+                              undefined
+                              ? `${inspection.vibration_at_inspection.toFixed(
+                                  2
+                                )} mm/s`
+                              : "—"}
+                          </p>
+                        </div>
+
+                        <div>
+                          <p className="text-slate-500">
+                            Anomaly
+                          </p>
+
+                          <p
+                            className={`mt-1 font-medium ${
+                              inspection.anomaly_status_at_inspection ===
+                              "Anomaly Detected"
+                                ? "text-yellow-400"
+                                : inspection.anomaly_status_at_inspection ===
+                                  "No Anomaly Detected"
+                                ? "text-emerald-400"
+                                : "text-slate-400"
+                            }`}
+                          >
+                            {inspection.anomaly_status_at_inspection ||
+                              "—"}
+                          </p>
+                        </div>
+
                         <div>
                           <p className="text-slate-500">
                             Confidence
