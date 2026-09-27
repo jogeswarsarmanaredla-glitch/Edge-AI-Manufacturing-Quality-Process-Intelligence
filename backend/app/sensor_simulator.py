@@ -1,65 +1,184 @@
 import random
 import time
 from datetime import datetime
+from pathlib import Path
 
 import requests
 
 
 FASTAPI_URL = "http://172.19.32.1:8000"
 
+BASE_DIR = Path("/mnt/c/ManufacturingAI/backend")
+PROFILE_FILE = (
+    BASE_DIR / "data" / "cira_pump" / "baseline_profiles.json"
+)
 
-MACHINES = {
-    1: {
-        "temperature": 72.0,
-        "vibration": 3.2,
-        "pressure": 6.5,
-    },
-    2: {
-        "temperature": 76.0,
-        "vibration": 4.1,
-        "pressure": 6.8,
-    },
-    3: {
-        "temperature": 68.0,
-        "vibration": 2.0,
-        "pressure": 6.3,
-    },
-    4: {
-        "temperature": 82.0,
-        "vibration": 5.5,
-        "pressure": 7.1,
-    },
+MACHINE_PROFILES = {
+    1: "A",
+    2: "B",
+    3: "C",
 }
 
 
-def generate_reading(machine_id: int):
-    base = MACHINES[machine_id]
+def load_profiles():
+    import json
 
-    # Mostly normal readings
-    temperature = base["temperature"] + random.uniform(-2.0, 2.0)
-    vibration = base["vibration"] + random.uniform(-0.4, 0.4)
-    pressure = base["pressure"] + random.uniform(-0.2, 0.2)
+    with open(
+        PROFILE_FILE,
+        "r",
+        encoding="utf-8",
+    ) as file:
+        return json.load(file)
 
-    # Occasionally create an abnormal machine condition
+
+PROFILES = load_profiles()
+
+
+def get_profile(machine_id):
+    if machine_id in MACHINE_PROFILES:
+        return PROFILES[MACHINE_PROFILES[machine_id]]
+
+    # Machine 4 = synthetic prototype profile.
+    pumps = [
+        PROFILES["A"],
+        PROFILES["B"],
+        PROFILES["C"],
+    ]
+
+    return {
+        "temperature_c": {
+            "p05": sum(
+                p["temperature_c"]["p05"]
+                for p in pumps
+            ) / len(pumps),
+
+            "median": sum(
+                p["temperature_c"]["median"]
+                for p in pumps
+            ) / len(pumps),
+
+            "p95": sum(
+                p["temperature_c"]["p95"]
+                for p in pumps
+            ) / len(pumps),
+        },
+
+        "pressure_bar": {
+            "p05": sum(
+                p["pressure_bar"]["p05"]
+                for p in pumps
+            ) / len(pumps),
+
+            "median": sum(
+                p["pressure_bar"]["median"]
+                for p in pumps
+            ) / len(pumps),
+
+            "p95": sum(
+                p["pressure_bar"]["p95"]
+                for p in pumps
+            ) / len(pumps),
+        },
+
+        "vibration_mm_s": {
+            "p05": sum(
+                p["vibration_mm_s"]["p05"]
+                for p in pumps
+            ) / len(pumps),
+
+            "median": sum(
+                p["vibration_mm_s"]["median"]
+                for p in pumps
+            ) / len(pumps),
+
+            "p95": sum(
+                p["vibration_mm_s"]["p95"]
+                for p in pumps
+            ) / len(pumps),
+        },
+    }
+
+
+def generate_reading(machine_id):
+
+    profile = get_profile(machine_id)
+
+    temp = profile["temperature_c"]
+    pressure = profile["pressure_bar"]
+    vibration = profile["vibration_mm_s"]
+
+    # Small natural variation around the real baseline.
+    temperature = random.gauss(
+        temp["median"],
+        max((temp["p95"] - temp["p05"]) / 8, 0.02),
+    )
+
+    pressure_value = random.gauss(
+        pressure["median"],
+        max((pressure["p95"] - pressure["p05"]) / 8, 0.005),
+    )
+
+    vibration_value = random.gauss(
+        vibration["median"],
+        max((vibration["p95"] - vibration["p05"]) / 8, 0.01),
+    )
+
+    # Simulate an occasional abnormal condition.
     abnormal = random.random() < 0.10
 
     if abnormal:
-        temperature += random.uniform(10.0, 15.0)
-        vibration += random.uniform(3.0, 5.0)
-        pressure += random.uniform(0.8, 1.5)
+
+        failure_type = random.choice(
+            [
+                "temperature",
+                "pressure",
+                "vibration",
+                "combined",
+            ]
+        )
+
+        if failure_type in {"temperature", "combined"}:
+            temperature += max(
+                (temp["p95"] - temp["p05"]) * 1.5,
+                2.0,
+            )
+
+        if failure_type in {"pressure", "combined"}:
+            pressure_value += max(
+                (pressure["p95"] - pressure["p05"]) * 3,
+                2.0,
+            )
+
+        if failure_type in {"vibration", "combined"}:
+            vibration_value += max(
+                (vibration["p95"] - vibration["p05"]) * 4,
+                1.0,
+            )
 
     return {
         "machine_id": machine_id,
-        "temperature": round(temperature, 2),
-        "vibration": round(vibration, 2),
-        "pressure": round(pressure, 2),
+        "temperature": round(
+            temperature,
+            3,
+        ),
+        "pressure": round(
+            pressure_value,
+            3,
+        ),
+        "vibration": round(
+            vibration_value,
+            3,
+        ),
         "abnormal": abnormal,
         "recorded_at": datetime.now().isoformat(),
     }
 
 
-def send_reading(machine_id: int):
-    reading = generate_reading(machine_id)
+def send_reading(machine_id):
+
+    reading = generate_reading(
+        machine_id
+    )
 
     payload = {
         "machine_id": reading["machine_id"],
@@ -77,8 +196,11 @@ def send_reading(machine_id: int):
 
     response.raise_for_status()
 
+    state = "ABNORMAL" if reading["abnormal"] else "NORMAL"
+
     print(
         f"Machine {machine_id} | "
+        f"{state} | "
         f"T={reading['temperature']} °C | "
         f"V={reading['vibration']} mm/s | "
         f"P={reading['pressure']} bar"
@@ -86,15 +208,34 @@ def send_reading(machine_id: int):
 
 
 if __name__ == "__main__":
-    print("Starting Manufacturing AI sensor simulator...")
+
+    print("=" * 60)
+    print("MANUFACTURING AI")
+    print("CIRA-CALIBRATED SENSOR SIMULATOR")
+    print("=" * 60)
+
+    print()
+    print("Machine mapping:")
+    print("Machine 1 -> CIRA Pump A profile")
+    print("Machine 2 -> CIRA Pump B profile")
+    print("Machine 3 -> CIRA Pump C profile")
+    print("Machine 4 -> Synthetic average profile")
+
+    print()
+    print("Starting simulator...")
+    print("Press Ctrl+C to stop.")
 
     while True:
-        for machine_id in MACHINES:
+
+        for machine_id in [1, 2, 3, 4]:
+
             try:
                 send_reading(machine_id)
+
             except requests.RequestException as error:
                 print(
-                    f"Machine {machine_id} request failed: {error}"
+                    f"Machine {machine_id} "
+                    f"request failed: {error}"
                 )
 
         time.sleep(5)

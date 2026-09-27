@@ -12,6 +12,7 @@ __pycache__/
 # Generated ML/data files
 backend/sensors.csv
 backend/ai_alerts.csv
+backend/uploads/
 
 # Node / React
 frontend/node_modules/
@@ -29,3 +30,6 @@ Thumbs.db
 
 # VS Code local settings
 .vscode/
+
+# Local research datasets
+backend/data/

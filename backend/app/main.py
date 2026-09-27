@@ -1,7 +1,9 @@
 from datetime import datetime, timedelta
+from pathlib import Path
+import json
 import subprocess
 
-from fastapi import FastAPI
+from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -10,6 +12,11 @@ from app.database import engine
 
 
 app = FastAPI(title="Manufacturing AI API")
+
+# Inspection image storage
+BASE_DIR = Path(__file__).resolve().parent.parent
+INSPECTION_UPLOAD_DIR = BASE_DIR / "uploads" / "inspections"
+INSPECTION_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # Prevent repeated AI alerts for the same machine
 # inside this cooldown window.
@@ -55,6 +62,194 @@ def health_check():
     return {
         "status": "ok",
         "message": "Manufacturing AI backend is running",
+    }
+
+
+# ============================================================
+# INSPECTION IMAGE UPLOAD
+# ============================================================
+
+@app.post("/api/inspections/upload")
+async def upload_inspection_image(
+    file: UploadFile = File(...),
+):
+    allowed_content_types = {
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+    }
+
+    if file.content_type not in allowed_content_types:
+        return {
+            "status": "error",
+            "message": "Only JPG, PNG, and WEBP images are supported.",
+        }
+
+    file_extension = Path(file.filename or "").suffix.lower()
+
+    if file_extension not in {".jpg", ".jpeg", ".png", ".webp"}:
+        return {
+            "status": "error",
+            "message": "Unsupported image file extension.",
+        }
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    safe_filename = f"inspection_{timestamp}{file_extension}"
+    file_path = INSPECTION_UPLOAD_DIR / safe_filename
+
+    contents = await file.read()
+    file_path.write_bytes(contents)
+
+    return {
+        "status": "ok",
+        "message": "Inspection image uploaded successfully.",
+        "filename": safe_filename,
+        "path": str(file_path),
+    }
+
+
+# ============================================================
+# INSPECTION RECORDS
+# ============================================================
+
+@app.get("/api/inspections")
+def get_inspections():
+    with engine.connect() as connection:
+        result = connection.execute(
+            text("""
+                SELECT
+                    id,
+                    machine_id,
+                    image_path,
+                    result,
+                    confidence,
+                    defect_count,
+                    defect_details,
+                    created_at
+                FROM inspections
+                ORDER BY created_at DESC, id DESC
+                LIMIT 50
+            """)
+        ).mappings().all()
+
+    inspections = []
+
+    for row in result:
+        inspections.append(
+            {
+                "id": row["id"],
+                "machine_id": row["machine_id"],
+                "image_path": row["image_path"],
+                "result": row["result"],
+                "confidence": (
+                    float(row["confidence"])
+                    if row["confidence"] is not None
+                    else None
+                ),
+                "defect_count": int(row["defect_count"] or 0),
+                "defect_details": row["defect_details"],
+                "created_at": (
+                    row["created_at"].isoformat()
+                    if row["created_at"] is not None
+                    else None
+                ),
+            }
+        )
+
+    return inspections
+
+
+@app.post("/api/inspections/create")
+async def create_inspection(
+    machine_id: int,
+    file: UploadFile = File(...),
+):
+    allowed_content_types = {
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+    }
+
+    if file.content_type not in allowed_content_types:
+        return {
+            "status": "error",
+            "message": "Only JPG, PNG, and WEBP images are supported.",
+        }
+
+    file_extension = Path(file.filename or "").suffix.lower()
+
+    if file_extension not in {".jpg", ".jpeg", ".png", ".webp"}:
+        return {
+            "status": "error",
+            "message": "Unsupported image file extension.",
+        }
+
+    with engine.begin() as connection:
+        machine_exists = connection.execute(
+            text("""
+                SELECT 1
+                FROM machines
+                WHERE id = :machine_id
+                LIMIT 1
+            """),
+            {"machine_id": machine_id},
+        ).first()
+
+        if not machine_exists:
+            return {
+                "status": "error",
+                "message": f"Machine {machine_id} does not exist.",
+            }
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        safe_filename = f"inspection_{timestamp}{file_extension}"
+        file_path = INSPECTION_UPLOAD_DIR / safe_filename
+
+        contents = await file.read()
+        file_path.write_bytes(contents)
+
+        inspection_result = connection.execute(
+            text("""
+                INSERT INTO inspections (
+                    machine_id,
+                    image_path,
+                    result,
+                    confidence,
+                    defect_count,
+                    defect_details
+                )
+                VALUES (
+                    :machine_id,
+                    :image_path,
+                    'Pending',
+                    NULL,
+                    0,
+                    :defect_details
+                )
+                RETURNING
+                    id,
+                    created_at
+            """),
+            {
+                "machine_id": machine_id,
+                "image_path": str(file_path),
+                "defect_details": "Awaiting computer vision analysis.",
+            },
+        ).mappings().one()
+
+    return {
+        "status": "ok",
+        "message": "Inspection created successfully.",
+        "inspection_id": inspection_result["id"],
+        "machine_id": machine_id,
+        "filename": safe_filename,
+        "path": str(file_path),
+        "result": "Pending",
+        "created_at": (
+            inspection_result["created_at"].isoformat()
+            if inspection_result["created_at"] is not None
+            else None
+        ),
     }
 
 
@@ -390,6 +585,186 @@ def get_analytics():
             },
 
             "machines": machines,
+        }
+
+
+# ============================================================
+# LIVE MACHINE HEALTH SCORES
+# ============================================================
+
+@app.get("/api/health-scores")
+def get_health_scores():
+    """
+    Calculate live machine health scores from the current
+    PostgreSQL sensor stream using the CIRA-based health service.
+    """
+
+    command = (
+        "source /home/jogesh-3339/.mlvenv/bin/activate && "
+        "cd /mnt/c/ManufacturingAI/backend && "
+        "python app/ml/health_api.py"
+    )
+
+    try:
+        result = subprocess.run(
+            [
+                "wsl",
+                "bash",
+                "-lc",
+                command,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        if result.returncode != 0:
+            return {
+                "status": "error",
+                "message": "Health score calculation failed",
+                "error": result.stderr.strip(),
+                "machines": [],
+            }
+
+        output = result.stdout.strip()
+
+        if not output:
+            return {
+                "status": "error",
+                "message": "Health score service returned no data",
+                "machines": [],
+            }
+
+        health_data = json.loads(output)
+
+        return health_data
+
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "message": "Health score calculation timed out",
+            "machines": [],
+        }
+
+    except json.JSONDecodeError as error:
+        return {
+            "status": "error",
+            "message": "Invalid JSON returned by health score service",
+            "error": str(error),
+            "machines": [],
+        }
+
+    except Exception as error:
+        return {
+            "status": "error",
+            "message": "Failed to calculate health scores",
+            "error": str(error),
+            "machines": [],
+        }
+
+
+# ============================================================
+# COMBINED MACHINE AI INSIGHTS
+# ============================================================
+
+@app.get("/api/machine-insights")
+def get_machine_insights():
+    """
+    Calculate a unified machine insight using:
+    - CIRA-based health scoring
+    - Machine-specific Isolation Forest anomaly detection
+
+    The combined_monitor.py script prints diagnostic text
+    followed by a final JSON object. This endpoint extracts
+    that final JSON result and returns it to the frontend.
+    """
+
+    command = (
+        "source /home/jogesh-3339/.mlvenv/bin/activate && "
+        "cd /mnt/c/ManufacturingAI/backend && "
+        "python app/ml/combined_monitor.py"
+    )
+
+    try:
+        result = subprocess.run(
+            [
+                "wsl",
+                "bash",
+                "-lc",
+                command,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        if result.returncode != 0:
+            return {
+                "status": "error",
+                "message": "Combined AI analysis failed",
+                "error": result.stderr.strip(),
+                "machines": [],
+            }
+
+        output = result.stdout.strip()
+
+        if not output:
+            return {
+                "status": "error",
+                "message": "Combined AI service returned no data",
+                "machines": [],
+            }
+
+        # combined_monitor.py prints diagnostic text before
+        # its final JSON response. Find that final JSON block.
+        json_marker = '\n{\n  "status":'
+
+        json_start = output.rfind(json_marker)
+
+        if json_start == -1:
+            json_start = output.find('{\n  "status":')
+
+        if json_start == -1:
+            return {
+                "status": "error",
+                "message": (
+                    "No JSON result returned by combined AI service"
+                ),
+                "raw_output": output,
+                "machines": [],
+            }
+
+        json_output = output[json_start:].strip()
+
+        try:
+            machine_data = json.loads(json_output)
+
+        except json.JSONDecodeError as error:
+            return {
+                "status": "error",
+                "message": (
+                    "Invalid JSON returned by combined AI service"
+                ),
+                "error": str(error),
+                "raw_output": output,
+                "machines": [],
+            }
+
+        return machine_data
+
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "message": "Combined AI analysis timed out",
+            "machines": [],
+        }
+
+    except Exception as error:
+        return {
+            "status": "error",
+            "message": "Failed to calculate machine insights",
+            "error": str(error),
+            "machines": [],
         }
 
 

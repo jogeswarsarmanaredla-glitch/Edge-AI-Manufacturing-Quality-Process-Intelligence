@@ -61,3 +61,65 @@ export async function runAIAnalysis() {
 
   return response.json();
 }
+
+export async function getHealthScores() {
+  const response = await fetch(`${API_BASE_URL}/api/health-scores`);
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch health scores");
+  }
+
+  return response.json();
+}
+
+// ============================================================
+// INSPECTIONS
+// ============================================================
+
+export async function getInspections() {
+  const response = await fetch(`${API_BASE_URL}/api/inspections`);
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch inspections");
+  }
+
+  return response.json();
+}
+
+export async function createInspection(
+  machineId: number,
+  file: File
+) {
+  const formData = new FormData();
+
+  formData.append("file", file);
+
+  const response = await fetch(
+    `${API_BASE_URL}/api/inspections/create?machine_id=${machineId}`,
+    {
+      method: "POST",
+      body: formData,
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error("Failed to create inspection");
+  }
+
+  return response.json();
+}
+// ============================================================
+// COMBINED MACHINE AI INSIGHTS
+// ============================================================
+
+export async function getMachineInsights() {
+  const response = await fetch(
+    `${API_BASE_URL}/api/machine-insights`
+  );
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch machine AI insights");
+  }
+
+  return response.json();
+}
