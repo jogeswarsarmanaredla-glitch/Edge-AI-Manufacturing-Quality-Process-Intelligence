@@ -109,6 +109,78 @@ async def upload_inspection_image(
 
 
 # ============================================================
+# COMPUTER VISION INSPECTION
+# ============================================================
+
+def windows_to_wsl_path(path: Path) -> str:
+    """Convert a Windows C: path into the WSL /mnt/c path."""
+    path_text = str(path).replace("\\", "/")
+
+    if len(path_text) >= 2 and path_text[1] == ":":
+        drive = path_text[0].lower()
+        return f"/mnt/{drive}{path_text[2:]}"
+
+    return path_text
+
+
+def run_cv_inspection(image_path: Path):
+    """
+    Run the trained YOLO11n surface-defect model in WSL.
+    Returns structured JSON from inspect_cv.py.
+    """
+
+    wsl_image_path = windows_to_wsl_path(image_path)
+
+    command = (
+        "source /home/jogesh-3339/.mlvenv/bin/activate && "
+        "python /mnt/c/ManufacturingAI/backend/app/ml/inspect_cv.py "
+        f"'{wsl_image_path}'"
+    )
+
+    result = subprocess.run(
+        [
+            "wsl",
+            "bash",
+            "-lc",
+            command,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            result.stderr.strip()
+            or "Computer vision inference failed."
+        )
+
+    output = result.stdout.strip()
+
+    if not output:
+        raise RuntimeError(
+            "Computer vision service returned no output."
+        )
+
+    try:
+        cv_data = json.loads(output)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(
+            f"Invalid CV JSON output: {error}"
+        ) from error
+
+    if cv_data.get("status") != "ok":
+        raise RuntimeError(
+            cv_data.get(
+                "message",
+                "Computer vision analysis failed."
+            )
+        )
+
+    return cv_data
+
+
+# ============================================================
 # INSPECTION RECORDS
 # ============================================================
 
@@ -308,6 +380,37 @@ def create_inspection(
         contents = file.file.read()
         file_path.write_bytes(contents)
 
+        # --------------------------------------------------------
+        # Run the trained computer-vision model.
+        # --------------------------------------------------------
+        cv_result = "Pending"
+        cv_confidence = None
+        cv_defect_count = 0
+        cv_defect_details = "Computer vision analysis pending."
+
+        try:
+            cv_data = run_cv_inspection(file_path)
+
+            cv_result = cv_data.get("result", "Pending")
+            cv_confidence = cv_data.get("confidence")
+            cv_defect_count = int(
+                cv_data.get("defect_count", 0)
+            )
+            cv_defect_details = cv_data.get(
+                "defect_details",
+                "Computer vision analysis completed."
+            )
+
+        except Exception as cv_error:
+            # Keep the inspection record usable even if inference fails.
+            cv_result = "Pending"
+            cv_confidence = None
+            cv_defect_count = 0
+            cv_defect_details = (
+                "Computer vision analysis unavailable: "
+                f"{str(cv_error)}"
+            )
+
         inspection_result = connection.execute(
             text("""
                 INSERT INTO inspections (
@@ -326,9 +429,9 @@ def create_inspection(
                 VALUES (
                     :machine_id,
                     :image_path,
-                    'Pending',
-                    NULL,
-                    0,
+                    :result,
+                    :confidence,
+                    :defect_count,
                     :defect_details,
                     :health_score_at_inspection,
                     :temperature_at_inspection,
@@ -343,7 +446,10 @@ def create_inspection(
             {
                 "machine_id": machine_id,
                 "image_path": str(file_path),
-                "defect_details": "Awaiting computer vision analysis.",
+                "result": cv_result,
+                "confidence": cv_confidence,
+                "defect_count": cv_defect_count,
+                "defect_details": cv_defect_details,
                 "health_score_at_inspection": health_score_at_inspection,
                 "temperature_at_inspection": temperature_at_inspection,
                 "pressure_at_inspection": pressure_at_inspection,
@@ -359,7 +465,10 @@ def create_inspection(
         "machine_id": machine_id,
         "filename": safe_filename,
         "path": str(file_path),
-        "result": "Pending",
+        "result": cv_result,
+        "confidence": cv_confidence,
+        "defect_count": cv_defect_count,
+        "defect_details": cv_defect_details,
         "health_score_at_inspection": health_score_at_inspection,
         "temperature_at_inspection": temperature_at_inspection,
         "pressure_at_inspection": pressure_at_inspection,
