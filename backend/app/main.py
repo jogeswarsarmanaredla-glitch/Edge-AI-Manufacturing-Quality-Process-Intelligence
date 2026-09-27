@@ -125,6 +125,11 @@ def get_inspections():
                     confidence,
                     defect_count,
                     defect_details,
+                    health_score_at_inspection,
+                    temperature_at_inspection,
+                    pressure_at_inspection,
+                    vibration_at_inspection,
+                    anomaly_status_at_inspection,
                     created_at
                 FROM inspections
                 ORDER BY created_at DESC, id DESC
@@ -148,6 +153,27 @@ def get_inspections():
                 ),
                 "defect_count": int(row["defect_count"] or 0),
                 "defect_details": row["defect_details"],
+                "health_score_at_inspection": (
+                    float(row["health_score_at_inspection"])
+                    if row["health_score_at_inspection"] is not None
+                    else None
+                ),
+                "temperature_at_inspection": (
+                    float(row["temperature_at_inspection"])
+                    if row["temperature_at_inspection"] is not None
+                    else None
+                ),
+                "pressure_at_inspection": (
+                    float(row["pressure_at_inspection"])
+                    if row["pressure_at_inspection"] is not None
+                    else None
+                ),
+                "vibration_at_inspection": (
+                    float(row["vibration_at_inspection"])
+                    if row["vibration_at_inspection"] is not None
+                    else None
+                ),
+                "anomaly_status_at_inspection": row["anomaly_status_at_inspection"],
                 "created_at": (
                     row["created_at"].isoformat()
                     if row["created_at"] is not None
@@ -160,7 +186,7 @@ def get_inspections():
 
 
 @app.post("/api/inspections/create")
-async def create_inspection(
+def create_inspection(
     machine_id: int,
     file: UploadFile = File(...),
 ):
@@ -201,11 +227,85 @@ async def create_inspection(
                 "message": f"Machine {machine_id} does not exist.",
             }
 
+        # --------------------------------------------------------
+        # Capture the machine condition at the exact moment the
+        # inspection is created. This gives the future CV model
+        # process context for each product inspection.
+        # --------------------------------------------------------
+        health_score_at_inspection = None
+        temperature_at_inspection = None
+        pressure_at_inspection = None
+        vibration_at_inspection = None
+        anomaly_status_at_inspection = "Unavailable"
+
+        try:
+            current_insights = get_machine_insights()
+
+            if current_insights.get("status") == "ok":
+                for machine in current_insights.get("machines", []):
+                    if int(machine.get("machine_id")) == machine_id:
+                        health_score_at_inspection = (
+                            float(machine["health_score"])
+                            if machine.get("health_score") is not None
+                            else None
+                        )
+
+                        anomaly_status_at_inspection = (
+                            "Anomaly Detected"
+                            if machine.get("anomaly_detected")
+                            else "No Anomaly Detected"
+                        )
+
+                        break
+
+        except Exception:
+            # Inspection creation should still succeed even when
+            # the optional AI snapshot is temporarily unavailable.
+            anomaly_status_at_inspection = "Unavailable"
+
+        sensor_rows = connection.execute(
+            text("""
+                SELECT
+                    sensor_type,
+                    value
+                FROM sensors
+                WHERE machine_id = :machine_id
+                ORDER BY recorded_at DESC, id DESC
+                LIMIT 50
+            """),
+            {"machine_id": machine_id},
+        ).mappings().all()
+
+        seen_sensor_types = set()
+
+        for sensor_row in sensor_rows:
+            sensor_type = str(
+                sensor_row["sensor_type"]
+            ).strip().lower()
+
+            if sensor_type in seen_sensor_types:
+                continue
+
+            seen_sensor_types.add(sensor_type)
+
+            value = (
+                float(sensor_row["value"])
+                if sensor_row["value"] is not None
+                else None
+            )
+
+            if "temperature" in sensor_type:
+                temperature_at_inspection = value
+            elif "pressure" in sensor_type:
+                pressure_at_inspection = value
+            elif "vibration" in sensor_type:
+                vibration_at_inspection = value
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         safe_filename = f"inspection_{timestamp}{file_extension}"
         file_path = INSPECTION_UPLOAD_DIR / safe_filename
 
-        contents = await file.read()
+        contents = file.file.read()
         file_path.write_bytes(contents)
 
         inspection_result = connection.execute(
@@ -216,7 +316,12 @@ async def create_inspection(
                     result,
                     confidence,
                     defect_count,
-                    defect_details
+                    defect_details,
+                    health_score_at_inspection,
+                    temperature_at_inspection,
+                    pressure_at_inspection,
+                    vibration_at_inspection,
+                    anomaly_status_at_inspection
                 )
                 VALUES (
                     :machine_id,
@@ -224,7 +329,12 @@ async def create_inspection(
                     'Pending',
                     NULL,
                     0,
-                    :defect_details
+                    :defect_details,
+                    :health_score_at_inspection,
+                    :temperature_at_inspection,
+                    :pressure_at_inspection,
+                    :vibration_at_inspection,
+                    :anomaly_status_at_inspection
                 )
                 RETURNING
                     id,
@@ -234,6 +344,11 @@ async def create_inspection(
                 "machine_id": machine_id,
                 "image_path": str(file_path),
                 "defect_details": "Awaiting computer vision analysis.",
+                "health_score_at_inspection": health_score_at_inspection,
+                "temperature_at_inspection": temperature_at_inspection,
+                "pressure_at_inspection": pressure_at_inspection,
+                "vibration_at_inspection": vibration_at_inspection,
+                "anomaly_status_at_inspection": anomaly_status_at_inspection,
             },
         ).mappings().one()
 
@@ -245,6 +360,11 @@ async def create_inspection(
         "filename": safe_filename,
         "path": str(file_path),
         "result": "Pending",
+        "health_score_at_inspection": health_score_at_inspection,
+        "temperature_at_inspection": temperature_at_inspection,
+        "pressure_at_inspection": pressure_at_inspection,
+        "vibration_at_inspection": vibration_at_inspection,
+        "anomaly_status_at_inspection": anomaly_status_at_inspection,
         "created_at": (
             inspection_result["created_at"].isoformat()
             if inspection_result["created_at"] is not None
