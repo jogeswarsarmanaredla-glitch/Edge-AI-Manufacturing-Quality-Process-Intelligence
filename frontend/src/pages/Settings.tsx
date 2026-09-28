@@ -6,7 +6,6 @@ import {
   CheckCircle2,
   Cpu,
   Database,
-  Eye,
   RefreshCw,
   Server,
   ShieldCheck,

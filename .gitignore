@@ -33,3 +33,6 @@ Thumbs.db
 
 # Local research datasets
 backend/data/*
+backend/runs/
+backend/wheels/
+backend/qai_wheels/

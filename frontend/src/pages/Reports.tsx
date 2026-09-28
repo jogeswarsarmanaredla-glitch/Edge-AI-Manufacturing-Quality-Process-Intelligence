@@ -2,8 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   AlertTriangle,
-  BarChart3,
-  CheckCircle2,
   FileDown,
   RefreshCw,
   ShieldCheck,

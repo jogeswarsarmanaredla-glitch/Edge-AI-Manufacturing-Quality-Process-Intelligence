@@ -41,23 +41,6 @@ type MachineInsight = {
   recorded_at?: string;
 };
 
-function normalizeMachineStatus(combinedStatus: string) {
-  const normalized = combinedStatus.toLowerCase();
-
-  if (normalized.includes("high deviation")) {
-    return "Critical";
-  }
-
-  if (
-    normalized.includes("inspection") ||
-    normalized.includes("monitor")
-  ) {
-    return "Warning";
-  }
-
-  return "Running";
-}
-
 function getStatusLabel(combinedStatus: string) {
   const normalized = combinedStatus.toLowerCase();
 
