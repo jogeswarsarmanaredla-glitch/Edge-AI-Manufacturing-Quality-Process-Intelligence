@@ -4,6 +4,7 @@ import json
 import subprocess
 
 from fastapi import FastAPI, File, UploadFile
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -17,6 +18,13 @@ app = FastAPI(title="Manufacturing AI API")
 BASE_DIR = Path(__file__).resolve().parent.parent
 INSPECTION_UPLOAD_DIR = BASE_DIR / "uploads" / "inspections"
 INSPECTION_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+# Serve original and AI-annotated inspection images to the frontend.
+app.mount(
+    "/inspection-images",
+    StaticFiles(directory=str(INSPECTION_UPLOAD_DIR)),
+    name="inspection-images",
+)
 
 # Prevent repeated AI alerts for the same machine
 # inside this cooldown window.
@@ -123,6 +131,18 @@ def windows_to_wsl_path(path: Path) -> str:
     return path_text
 
 
+def wsl_to_windows_path(path_text: str) -> str:
+    """Convert a WSL path back into a Windows path."""
+    normalized = str(path_text).replace("\\", "/")
+
+    if normalized.startswith("/mnt/") and len(normalized) > 6:
+        drive = normalized[5].upper()
+        remainder = normalized[6:].replace("/", "\\")
+        return f"{drive}:{remainder}"
+
+    return str(path_text)
+
+
 def run_cv_inspection(image_path: Path):
     """
     Run the trained YOLO11n surface-defect model in WSL.
@@ -193,6 +213,7 @@ def get_inspections():
                     id,
                     machine_id,
                     image_path,
+                    annotated_image_path,
                     result,
                     confidence,
                     defect_count,
@@ -217,6 +238,12 @@ def get_inspections():
                 "id": row["id"],
                 "machine_id": row["machine_id"],
                 "image_path": row["image_path"],
+                "annotated_image_path": row["annotated_image_path"],
+                "annotated_image_filename": (
+                    Path(row["annotated_image_path"]).name
+                    if row["annotated_image_path"]
+                    else None
+                ),
                 "result": row["result"],
                 "confidence": (
                     float(row["confidence"])
@@ -387,6 +414,7 @@ def create_inspection(
         cv_confidence = None
         cv_defect_count = 0
         cv_defect_details = "Computer vision analysis pending."
+        cv_annotated_image_path = None
 
         try:
             cv_data = run_cv_inspection(file_path)
@@ -400,6 +428,17 @@ def create_inspection(
                 "defect_details",
                 "Computer vision analysis completed."
             )
+
+            annotated_path_from_cv = cv_data.get(
+                "annotated_image_path"
+            )
+
+            if annotated_path_from_cv:
+                cv_annotated_image_path = (
+                    wsl_to_windows_path(
+                        annotated_path_from_cv
+                    )
+                )
 
         except Exception as cv_error:
             # Keep the inspection record usable even if inference fails.
@@ -416,6 +455,7 @@ def create_inspection(
                 INSERT INTO inspections (
                     machine_id,
                     image_path,
+                    annotated_image_path,
                     result,
                     confidence,
                     defect_count,
@@ -429,6 +469,7 @@ def create_inspection(
                 VALUES (
                     :machine_id,
                     :image_path,
+                    :annotated_image_path,
                     :result,
                     :confidence,
                     :defect_count,
@@ -446,6 +487,7 @@ def create_inspection(
             {
                 "machine_id": machine_id,
                 "image_path": str(file_path),
+                "annotated_image_path": cv_annotated_image_path,
                 "result": cv_result,
                 "confidence": cv_confidence,
                 "defect_count": cv_defect_count,
@@ -465,6 +507,12 @@ def create_inspection(
         "machine_id": machine_id,
         "filename": safe_filename,
         "path": str(file_path),
+        "annotated_image_path": cv_annotated_image_path,
+        "annotated_image_filename": (
+            Path(cv_annotated_image_path).name
+            if cv_annotated_image_path
+            else None
+        ),
         "result": cv_result,
         "confidence": cv_confidence,
         "defect_count": cv_defect_count,
