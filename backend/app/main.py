@@ -871,66 +871,9 @@ def get_analytics():
 
 @app.get("/api/health-scores")
 def get_health_scores():
-    """
-    Calculate live machine health scores from the current
-    PostgreSQL sensor stream using the CIRA-based health service.
-    """
-
-    command = (
-        "source /home/jogesh-3339/.mlvenv/bin/activate && "
-        "cd /mnt/c/ManufacturingAI/backend && "
-        "python app/ml/health_api.py"
-    )
-
+    """Calculate live machine health scores directly from PostgreSQL."""
     try:
-        result = subprocess.run(
-            [
-                "wsl",
-                "bash",
-                "-lc",
-                command,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-
-        if result.returncode != 0:
-            return {
-                "status": "error",
-                "message": "Health score calculation failed",
-                "error": result.stderr.strip(),
-                "machines": [],
-            }
-
-        output = result.stdout.strip()
-
-        if not output:
-            return {
-                "status": "error",
-                "message": "Health score service returned no data",
-                "machines": [],
-            }
-
-        health_data = json.loads(output)
-
-        return health_data
-
-    except subprocess.TimeoutExpired:
-        return {
-            "status": "error",
-            "message": "Health score calculation timed out",
-            "machines": [],
-        }
-
-    except json.JSONDecodeError as error:
-        return {
-            "status": "error",
-            "message": "Invalid JSON returned by health score service",
-            "error": str(error),
-            "machines": [],
-        }
-
+        return build_health_results()
     except Exception as error:
         return {
             "status": "error",
@@ -940,102 +883,16 @@ def get_health_scores():
         }
 
 
-# ============================================================
-# COMBINED MACHINE AI INSIGHTS
-# ============================================================
-
 @app.get("/api/machine-insights")
 def get_machine_insights():
-    """
-    Calculate a unified machine insight using:
-    - CIRA-based health scoring
-    - Machine-specific Isolation Forest anomaly detection
-
-    The combined_monitor.py script prints diagnostic text
-    followed by a final JSON object. This endpoint extracts
-    that final JSON result and returns it to the frontend.
-    """
-
-    command = (
-        "source /home/jogesh-3339/.mlvenv/bin/activate && "
-        "cd /mnt/c/ManufacturingAI/backend && "
-        "python app/ml/combined_monitor.py"
-    )
-
+    """Calculate combined machine insights directly from PostgreSQL."""
     try:
-        result = subprocess.run(
-            [
-                "wsl",
-                "bash",
-                "-lc",
-                command,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-
-        if result.returncode != 0:
-            return {
-                "status": "error",
-                "message": "Combined AI analysis failed",
-                "error": result.stderr.strip(),
-                "machines": [],
-            }
-
-        output = result.stdout.strip()
-
-        if not output:
-            return {
-                "status": "error",
-                "message": "Combined AI service returned no data",
-                "machines": [],
-            }
-
-        # combined_monitor.py prints diagnostic text before
-        # its final JSON response. Find that final JSON block.
-        json_marker = '\n{\n  "status":'
-
-        json_start = output.rfind(json_marker)
-
-        if json_start == -1:
-            json_start = output.find('{\n  "status":')
-
-        if json_start == -1:
-            return {
-                "status": "error",
-                "message": (
-                    "No JSON result returned by combined AI service"
-                ),
-                "raw_output": output,
-                "machines": [],
-            }
-
-        json_output = output[json_start:].strip()
-
-        try:
-            machine_data = json.loads(json_output)
-
-        except json.JSONDecodeError as error:
-            return {
-                "status": "error",
-                "message": (
-                    "Invalid JSON returned by combined AI service"
-                ),
-                "error": str(error),
-                "raw_output": output,
-                "machines": [],
-            }
-
-        return machine_data
-
-    except subprocess.TimeoutExpired:
+        df = load_sensor_data()
+        features = prepare_features(df)
         return {
-            "status": "error",
-            "message": "Combined AI analysis timed out",
-            "machines": [],
+            "status": "ok",
+            "machines": build_machine_insights(features),
         }
-
     except Exception as error:
         return {
             "status": "error",
@@ -1044,10 +901,6 @@ def get_machine_insights():
             "machines": [],
         }
 
-
-# ============================================================
-# AI ALERT INSERTION
-# ============================================================
 
 @app.post("/api/ai-alerts")
 def create_ai_alerts(alerts: list[AIAlert]):
@@ -1177,42 +1030,20 @@ def create_ai_alerts(alerts: list[AIAlert]):
 
 @app.post("/api/ai/analyze")
 def run_ai_analysis():
-    command = (
-        "source /home/jogesh-3339/.mlvenv/bin/activate && "
-        "cd /mnt/c/ManufacturingAI/backend && "
-        "python app/ml/anomaly.py"
-    )
-
+    """Run Isolation Forest directly against PostgreSQL sensor data."""
     try:
-        result = subprocess.run(
-            [
-                "wsl",
-                "bash",
-                "-lc",
-                command,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
+        df = load_anomaly_sensor_data()
+        features = prepare_anomaly_features(df)
+        results = detect_anomalies(features)
+        anomalies = results[
+            results["prediction"] == -1
+        ].sort_values("anomaly_score", ascending=False)
 
-        # AI process failed
-        if result.returncode != 0:
-            return {
-                "status": "error",
-                "message": "AI analysis failed",
-                "output": result.stdout,
-                "error": result.stderr,
-                "anomalies_detected": 0,
-                "anomalies": [],
-            }
-
-        # ----------------------------------------------------
-        # Read AI anomaly alerts from PostgreSQL
-        # ----------------------------------------------------
+        alerts = create_ai_alerts(anomalies)
+        insertion = insert_ai_alerts(alerts)
 
         with engine.connect() as connection:
-            ai_results = connection.execute(
+            rows = connection.execute(
                 text("""
                     SELECT
                         id,
@@ -1221,7 +1052,6 @@ def run_ai_analysis():
                         severity,
                         message,
                         value,
-                        unit,
                         created_at
                     FROM alerts
                     WHERE alert_type = 'AI Anomaly'
@@ -1230,65 +1060,43 @@ def run_ai_analysis():
                 """)
             ).mappings().all()
 
-        anomalies = []
-
-        for row in ai_results:
-            anomalies.append(
-                {
-                    "id": row["id"],
-                    "machine_id": row["machine_id"],
-                    "sensor_type": row["sensor_type"],
-                    "severity": row["severity"],
-                    "message": row["message"],
-                    "anomaly_score": (
-                        float(row["value"])
-                        if row["value"] is not None
-                        else None
-                    ),
-                    "created_at": (
-                        row["created_at"].isoformat()
-                        if row["created_at"] is not None
-                        else None
-                    ),
-                }
-            )
+        anomaly_rows = [
+            {
+                "id": row["id"],
+                "machine_id": row["machine_id"],
+                "sensor_type": row["sensor_type"],
+                "severity": row["severity"],
+                "message": row["message"],
+                "anomaly_score": (
+                    float(row["value"])
+                    if row["value"] is not None
+                    else None
+                ),
+                "created_at": (
+                    row["created_at"].isoformat()
+                    if row["created_at"] is not None
+                    else None
+                ),
+            }
+            for row in rows
+        ]
 
         return {
             "status": "ok",
             "message": "AI analysis completed successfully",
-            "output": result.stdout,
             "anomalies_detected": len(anomalies),
-            "anomalies": anomalies,
+            "alerts_inserted": insertion["inserted"],
+            "alerts_skipped": insertion["skipped"],
+            "anomalies": anomaly_rows,
         }
-
-    except subprocess.TimeoutExpired:
-        return {
-            "status": "error",
-            "message": "AI analysis timed out",
-            "anomalies_detected": 0,
-            "anomalies": [],
-        }
-
     except Exception as error:
         return {
             "status": "error",
-            "message": "Failed to start AI analysis",
+            "message": "Failed to run AI analysis",
             "error": str(error),
             "anomalies_detected": 0,
             "anomalies": [],
         }
-
-
-# ============================================================
-# SENSOR SIMULATION
-# ============================================================
-
-class SimulatedSensorReading(BaseModel):
-    machine_id: int
-    temperature: float
-    vibration: float
-    pressure: float
-    recorded_at: datetime
 
 
 @app.post("/api/simulate-sensor")
