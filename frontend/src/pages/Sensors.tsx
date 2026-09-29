@@ -285,7 +285,7 @@ function Sensors() {
             </CardHeader>
 
             <CardContent>
-              <div className="h-[320px] w-full">
+              <div className="h-80 w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={temperatureChartData}>
                     <CartesianGrid strokeDasharray="3 3" />
@@ -332,7 +332,7 @@ function Sensors() {
             </CardHeader>
 
             <CardContent>
-              <div className="h-[320px] w-full">
+              <div className="h-80 w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={vibrationChartData}>
                     <CartesianGrid strokeDasharray="3 3" />
@@ -379,7 +379,7 @@ function Sensors() {
             </CardHeader>
 
             <CardContent>
-              <div className="h-[320px] w-full">
+              <div className="h-80 w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={pressureChartData}>
                     <CartesianGrid strokeDasharray="3 3" />
@@ -433,6 +433,7 @@ function Sensors() {
                     key={sensor.id}
                     className="flex flex-col gap-4 rounded-xl border border-slate-800 bg-slate-950/60 p-4 sm:flex-row sm:items-center sm:justify-between"
                   >
+
                     <div className="flex items-center gap-4">
 
                       <div className="rounded-lg bg-slate-800 p-3">
@@ -479,6 +480,7 @@ function Sensors() {
                       </div>
 
                     </div>
+
                   </div>
                 ))}
 

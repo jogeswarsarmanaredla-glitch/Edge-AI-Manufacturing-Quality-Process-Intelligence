@@ -1,241 +1,123 @@
+"""
+Manufacturing AI - Live Sensor Simulator
+
+Sends changing sensor readings to the FastAPI backend every 5 seconds.
+Keep FastAPI running in another terminal.
+
+Run:
+    python sensor_simulator.py
+"""
+
+import json
 import random
 import time
 from datetime import datetime
-from pathlib import Path
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 
-import requests
+API_URL = "http://127.0.0.1:8000/api/simulate-sensor"
+INTERVAL_SECONDS = 5
 
-
-FASTAPI_URL = "http://172.19.32.1:8000"
-
-BASE_DIR = Path("/mnt/c/ManufacturingAI/backend")
-PROFILE_FILE = (
-    BASE_DIR / "data" / "cira_pump" / "baseline_profiles.json"
-)
-
-MACHINE_PROFILES = {
-    1: "A",
-    2: "B",
-    3: "C",
+# Starting values based on the current machine readings.
+machines = {
+    1: {"temperature": 24.85, "pressure": 42.59, "vibration": 3.08,
+        "base_temperature": 24.85, "base_pressure": 42.59, "base_vibration": 3.08},
+    2: {"temperature": 19.04, "pressure": 43.15, "vibration": 2.61,
+        "base_temperature": 19.04, "base_pressure": 43.15, "base_vibration": 2.61},
+    3: {"temperature": 19.43, "pressure": 43.29, "vibration": 2.73,
+        "base_temperature": 19.43, "base_pressure": 43.29, "base_vibration": 2.73},
+    4: {"temperature": 21.37, "pressure": 42.78, "vibration": 2.79,
+        "base_temperature": 21.37, "base_pressure": 42.78, "base_vibration": 2.79},
 }
 
 
-def load_profiles():
-    import json
-
-    with open(
-        PROFILE_FILE,
-        "r",
-        encoding="utf-8",
-    ) as file:
-        return json.load(file)
+def clamp(value: float, minimum: float, maximum: float) -> float:
+    return max(minimum, min(value, maximum))
 
 
-PROFILES = load_profiles()
+def update_machine(machine: dict) -> None:
+    # Small random walk so readings continuously change.
+    machine["temperature"] += random.uniform(-0.35, 0.35)
+    machine["pressure"] += random.uniform(-0.15, 0.15)
+    machine["vibration"] += random.uniform(-0.06, 0.06)
 
-
-def get_profile(machine_id):
-    if machine_id in MACHINE_PROFILES:
-        return PROFILES[MACHINE_PROFILES[machine_id]]
-
-    # Machine 4 = synthetic prototype profile.
-    pumps = [
-        PROFILES["A"],
-        PROFILES["B"],
-        PROFILES["C"],
-    ]
-
-    return {
-        "temperature_c": {
-            "p05": sum(
-                p["temperature_c"]["p05"]
-                for p in pumps
-            ) / len(pumps),
-
-            "median": sum(
-                p["temperature_c"]["median"]
-                for p in pumps
-            ) / len(pumps),
-
-            "p95": sum(
-                p["temperature_c"]["p95"]
-                for p in pumps
-            ) / len(pumps),
-        },
-
-        "pressure_bar": {
-            "p05": sum(
-                p["pressure_bar"]["p05"]
-                for p in pumps
-            ) / len(pumps),
-
-            "median": sum(
-                p["pressure_bar"]["median"]
-                for p in pumps
-            ) / len(pumps),
-
-            "p95": sum(
-                p["pressure_bar"]["p95"]
-                for p in pumps
-            ) / len(pumps),
-        },
-
-        "vibration_mm_s": {
-            "p05": sum(
-                p["vibration_mm_s"]["p05"]
-                for p in pumps
-            ) / len(pumps),
-
-            "median": sum(
-                p["vibration_mm_s"]["median"]
-                for p in pumps
-            ) / len(pumps),
-
-            "p95": sum(
-                p["vibration_mm_s"]["p95"]
-                for p in pumps
-            ) / len(pumps),
-        },
-    }
-
-
-def generate_reading(machine_id):
-
-    profile = get_profile(machine_id)
-
-    temp = profile["temperature_c"]
-    pressure = profile["pressure_bar"]
-    vibration = profile["vibration_mm_s"]
-
-    # Small natural variation around the real baseline.
-    temperature = random.gauss(
-        temp["median"],
-        max((temp["p95"] - temp["p05"]) / 8, 0.02),
+    # Keep the simulation around the calibrated operating region.
+    machine["temperature"] = clamp(
+        machine["temperature"],
+        machine["base_temperature"] - 3.0,
+        machine["base_temperature"] + 3.0,
     )
 
-    pressure_value = random.gauss(
-        pressure["median"],
-        max((pressure["p95"] - pressure["p05"]) / 8, 0.005),
+    machine["pressure"] = clamp(
+        machine["pressure"],
+        machine["base_pressure"] - 1.2,
+        machine["base_pressure"] + 1.2,
     )
 
-    vibration_value = random.gauss(
-        vibration["median"],
-        max((vibration["p95"] - vibration["p05"]) / 8, 0.01),
+    machine["vibration"] = clamp(
+        machine["vibration"],
+        machine["base_vibration"] - 0.45,
+        machine["base_vibration"] + 0.45,
     )
 
-    # Simulate an occasional abnormal condition.
-    abnormal = random.random() < 0.10
 
-    if abnormal:
-
-        failure_type = random.choice(
-            [
-                "temperature",
-                "pressure",
-                "vibration",
-                "combined",
-            ]
-        )
-
-        if failure_type in {"temperature", "combined"}:
-            temperature += max(
-                (temp["p95"] - temp["p05"]) * 1.5,
-                2.0,
-            )
-
-        if failure_type in {"pressure", "combined"}:
-            pressure_value += max(
-                (pressure["p95"] - pressure["p05"]) * 3,
-                2.0,
-            )
-
-        if failure_type in {"vibration", "combined"}:
-            vibration_value += max(
-                (vibration["p95"] - vibration["p05"]) * 4,
-                1.0,
-            )
-
-    return {
+def send_reading(machine_id: int, machine: dict) -> None:
+    payload = {
         "machine_id": machine_id,
-        "temperature": round(
-            temperature,
-            3,
-        ),
-        "pressure": round(
-            pressure_value,
-            3,
-        ),
-        "vibration": round(
-            vibration_value,
-            3,
-        ),
-        "abnormal": abnormal,
+        "temperature": round(machine["temperature"], 3),
+        "pressure": round(machine["pressure"], 3),
+        "vibration": round(machine["vibration"], 3),
         "recorded_at": datetime.now().isoformat(),
     }
 
-
-def send_reading(machine_id):
-
-    reading = generate_reading(
-        machine_id
+    request = Request(
+        API_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
     )
 
-    payload = {
-        "machine_id": reading["machine_id"],
-        "temperature": reading["temperature"],
-        "vibration": reading["vibration"],
-        "pressure": reading["pressure"],
-        "recorded_at": reading["recorded_at"],
-    }
+    try:
+        with urlopen(request, timeout=5) as response:
+            result = json.loads(response.read().decode("utf-8"))
 
-    response = requests.post(
-        f"{FASTAPI_URL}/api/simulate-sensor",
-        json=payload,
-        timeout=10,
-    )
+        if result.get("status") == "ok":
+            print(
+                f"Machine {machine_id} | "
+                f"Temp {payload['temperature']:.2f} °C | "
+                f"Pressure {payload['pressure']:.2f} bar | "
+                f"Vibration {payload['vibration']:.2f} mm/s"
+            )
+        else:
+            print(f"Machine {machine_id} | Backend error: {result}")
 
-    response.raise_for_status()
+    except HTTPError as error:
+        print(f"Machine {machine_id} | HTTP error: {error.code}")
+    except URLError as error:
+        print(f"Backend connection error: {error.reason}")
+        raise
+    except Exception as error:
+        print(f"Machine {machine_id} | Error: {error}")
 
-    state = "ABNORMAL" if reading["abnormal"] else "NORMAL"
 
-    print(
-        f"Machine {machine_id} | "
-        f"{state} | "
-        f"T={reading['temperature']} °C | "
-        f"V={reading['vibration']} mm/s | "
-        f"P={reading['pressure']} bar"
-    )
+def main() -> None:
+    print("=" * 70)
+    print("MANUFACTURING AI - LIVE SENSOR SIMULATOR")
+    print(f"Sending new readings every {INTERVAL_SECONDS} seconds")
+    print("Press Ctrl+C to stop.")
+    print("=" * 70)
+
+    while True:
+        for machine_id, machine in machines.items():
+            update_machine(machine)
+            send_reading(machine_id, machine)
+
+        print("-" * 70)
+        time.sleep(INTERVAL_SECONDS)
 
 
 if __name__ == "__main__":
-
-    print("=" * 60)
-    print("MANUFACTURING AI")
-    print("CIRA-CALIBRATED SENSOR SIMULATOR")
-    print("=" * 60)
-
-    print()
-    print("Machine mapping:")
-    print("Machine 1 -> CIRA Pump A profile")
-    print("Machine 2 -> CIRA Pump B profile")
-    print("Machine 3 -> CIRA Pump C profile")
-    print("Machine 4 -> Synthetic average profile")
-
-    print()
-    print("Starting simulator...")
-    print("Press Ctrl+C to stop.")
-
-    while True:
-
-        for machine_id in [1, 2, 3, 4]:
-
-            try:
-                send_reading(machine_id)
-
-            except requests.RequestException as error:
-                print(
-                    f"Machine {machine_id} "
-                    f"request failed: {error}"
-                )
-
-        time.sleep(5)
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nSensor simulator stopped.")
