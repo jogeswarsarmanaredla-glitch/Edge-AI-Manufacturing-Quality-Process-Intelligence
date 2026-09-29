@@ -36,3 +36,8 @@ backend/data/*
 backend/runs/
 backend/wheels/
 backend/qai_wheels/
+
+# Keep health-score baseline profile
+!backend/data/cira_pump/
+backend/data/cira_pump/*.csv
+!backend/data/cira_pump/baseline_profiles.json

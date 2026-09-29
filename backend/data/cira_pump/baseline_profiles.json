@@ -1,0 +1,62 @@
+{
+    "A": {
+        "pump": "A",
+        "source_file": "A_2024-04-10.csv",
+        "operating_rows": 395,
+        "temperature_c": {
+            "p05": 18.5031,
+            "median": 24.457,
+            "p95": 25.8473
+        },
+        "pressure_bar": {
+            "p05": 38.5884,
+            "median": 41.9281,
+            "p95": 41.9718
+        },
+        "vibration_mm_s": {
+            "p05": 3.0186,
+            "median": 3.1931,
+            "p95": 3.3865
+        }
+    },
+    "B": {
+        "pump": "B",
+        "source_file": "B_2024-04-10.csv",
+        "operating_rows": 300,
+        "temperature_c": {
+            "p05": 18.832,
+            "median": 19.0312,
+            "p95": 19.5234
+        },
+        "pressure_bar": {
+            "p05": 43.0612,
+            "median": 43.1603,
+            "p95": 43.2113
+        },
+        "vibration_mm_s": {
+            "p05": 2.4284,
+            "median": 2.5786,
+            "p95": 2.6812
+        }
+    },
+    "C": {
+        "pump": "C",
+        "source_file": "C_2024-04-10.csv",
+        "operating_rows": 719,
+        "temperature_c": {
+            "p05": 19.2852,
+            "median": 19.9688,
+            "p95": 21.3164
+        },
+        "pressure_bar": {
+            "p05": 43.2367,
+            "median": 43.277,
+            "p95": 43.3013
+        },
+        "vibration_mm_s": {
+            "p05": 2.5039,
+            "median": 2.7881,
+            "p95": 3.0656
+        }
+    }
+}
