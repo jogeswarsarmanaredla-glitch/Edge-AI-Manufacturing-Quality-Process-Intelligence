@@ -10,3 +10,4 @@ scikit-learn
 opencv-python-headless
 ultralytics
 Pillow
+psycopg[binary]
