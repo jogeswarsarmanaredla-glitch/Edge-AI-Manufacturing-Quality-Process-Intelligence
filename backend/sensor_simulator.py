@@ -9,6 +9,7 @@ Run:
 """
 
 import json
+import os
 import random
 import time
 from datetime import datetime
@@ -16,7 +17,8 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
 
-API_URL = "http://127.0.0.1:8000/api/simulate-sensor"
+BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
+API_URL = f"{BACKEND_URL}/api/simulate-sensor"
 INTERVAL_SECONDS = 5
 
 
@@ -310,3 +312,4 @@ if __name__ == "__main__":
         print(
             "\nSensor simulator stopped."
         )
+
