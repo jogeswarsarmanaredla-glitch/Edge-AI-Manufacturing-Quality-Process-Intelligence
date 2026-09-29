@@ -1,13 +1,22 @@
 import json
 import sys
+from pathlib import Path
 
 import pandas as pd
-import requests
+from sqlalchemy import text
 
+# ------------------------------------------------------------
+# Make backend/ importable when this file is executed directly.
+# ------------------------------------------------------------
+
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from app.database import engine
 from health_score import calculate_health_score
 
-
-FASTAPI_URL = "http://172.19.32.1:8000"
 
 READINGS_PER_SENSOR = 12
 
@@ -19,21 +28,44 @@ MACHINE_TO_PROFILE = {
 }
 
 
+# ============================================================
+# LOAD LIVE SENSOR DATA
+# ============================================================
+
 def get_live_sensor_data():
-    response = requests.get(
-        f"{FASTAPI_URL}/api/sensors",
-        timeout=15,
-    )
+    """
+    Read sensor data directly from PostgreSQL.
 
-    response.raise_for_status()
+    This avoids depending on a local/WSL FastAPI address,
+    making the health service suitable for deployment.
+    """
 
-    data = response.json()
+    with engine.connect() as connection:
+        result = connection.execute(
+            text("""
+                SELECT
+                    machine_id,
+                    sensor_type,
+                    value,
+                    recorded_at
+                FROM sensors
+                ORDER BY recorded_at DESC, id DESC
+            """)
+        )
+
+        data = result.mappings().all()
 
     if not data:
-        raise ValueError("No sensor data received.")
+        raise ValueError(
+            "No sensor data found in the database."
+        )
 
     return pd.DataFrame(data)
 
+
+# ============================================================
+# GET RECENT SENSOR VALUES
+# ============================================================
 
 def get_recent_sensor_values(machine_df):
     machine_df = machine_df.copy()
@@ -73,6 +105,10 @@ def get_recent_sensor_values(machine_df):
     return result
 
 
+# ============================================================
+# BUILD HEALTH RESULTS
+# ============================================================
+
 def build_health_results():
     df = get_live_sensor_data()
 
@@ -107,20 +143,26 @@ def build_health_results():
             {
                 "machine_id": machine_id,
                 "profile": profile,
+
                 "temperature": round(
                     values["Temperature"],
                     3,
                 ),
+
                 "pressure": round(
                     values["Pressure"],
                     3,
                 ),
+
                 "vibration": round(
                     values["Vibration"],
                     3,
                 ),
+
                 "health_score": health["health_score"],
+
                 "status": health["status"],
+
                 "sensor_scores": health["sensor_scores"],
             }
         )
@@ -131,9 +173,14 @@ def build_health_results():
     }
 
 
+# ============================================================
+# MAIN
+# ============================================================
+
 def main():
     try:
         result = build_health_results()
+
         print(
             json.dumps(
                 result,
