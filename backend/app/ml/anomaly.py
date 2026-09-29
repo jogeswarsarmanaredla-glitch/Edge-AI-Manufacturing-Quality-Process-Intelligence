@@ -1,313 +1,192 @@
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
+
 import pandas as pd
-import requests
 from sklearn.ensemble import IsolationForest
 
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 
-# ============================================================
-# FASTAPI CONFIGURATION
-# ============================================================
+from app.database import engine
+from sqlalchemy import text
 
-FASTAPI_URL = "http://172.19.32.1:8000"
+CONTAMINATION = 0.10
+AI_ALERT_COOLDOWN_SECONDS = 60
 
-
-# ============================================================
-# LOAD LIVE SENSOR DATA FROM FASTAPI
-# ============================================================
 
 def load_sensor_data():
-    url = f"{FASTAPI_URL}/api/sensors"
-
-    print("\nConnecting to FastAPI...")
-    print(f"URL: {url}")
-
-    try:
-        response = requests.get(
-            url,
-            timeout=10,
-        )
-
-        response.raise_for_status()
-
-        data = response.json()
-
-    except requests.RequestException as error:
-        raise RuntimeError(
-            f"Failed to fetch sensor data from FastAPI: {error}"
-        )
-
-    if not data:
-        raise RuntimeError(
-            "FastAPI returned no sensor data."
-        )
-
-    df = pd.DataFrame(data)
-
-    df["recorded_at"] = pd.to_datetime(
-        df["recorded_at"]
-    )
-
-    print(
-        f"Live sensor rows received: {len(df)}"
-    )
-
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text("""
+                SELECT machine_id, sensor_type, value, recorded_at
+                FROM sensors
+                ORDER BY recorded_at DESC, id DESC
+            """)
+        ).mappings().all()
+    if not rows:
+        raise RuntimeError("No sensor data found in the database.")
+    df = pd.DataFrame(rows)
+    df["recorded_at"] = pd.to_datetime(df["recorded_at"])
     return df
 
-
-# ============================================================
-# PREPARE ML FEATURES
-# ============================================================
 
 def prepare_features(df):
     features = (
         df.pivot_table(
-            index=[
-                "machine_id",
-                "recorded_at",
-            ],
+            index=["machine_id", "recorded_at"],
             columns="sensor_type",
             values="value",
             aggfunc="mean",
         )
         .reset_index()
     )
-
     features.columns.name = None
-
-    required_columns = [
+    required = [
         "machine_id",
         "recorded_at",
         "Temperature",
         "Vibration",
         "Pressure",
     ]
-
-    missing_columns = [
-        column
-        for column in required_columns
-        if column not in features.columns
-    ]
-
-    if missing_columns:
-        raise RuntimeError(
-            f"Missing sensor types: {missing_columns}"
-        )
-
-    features = features[
-        required_columns
-    ]
-
-    features = features.dropna(
-        subset=[
-            "Temperature",
-            "Vibration",
-            "Pressure",
-        ]
+    missing = [c for c in required if c not in features.columns]
+    if missing:
+        raise RuntimeError(f"Missing sensor types: {missing}")
+    return features[required].dropna(
+        subset=["Temperature", "Vibration", "Pressure"]
     )
 
-    return features
-
-
-# ============================================================
-# ISOLATION FOREST
-# ============================================================
 
 def detect_anomalies(features):
-    X = features[
-        [
-            "Temperature",
-            "Vibration",
-            "Pressure",
-        ]
-    ]
-
+    X = features[["Temperature", "Vibration", "Pressure"]]
     model = IsolationForest(
         n_estimators=200,
-        contamination=0.10,
+        contamination=CONTAMINATION,
         random_state=42,
     )
-
     model.fit(X)
+    results = features.copy()
+    results["prediction"] = model.predict(X)
+    results["anomaly_score"] = -model.decision_function(X)
+    return results
 
-    features = features.copy()
-
-    features["prediction"] = model.predict(X)
-
-    features["anomaly_score"] = (
-        -model.decision_function(X)
-    )
-
-    return features
-
-
-# ============================================================
-# CREATE AI ALERT PAYLOAD
-# ============================================================
 
 def create_ai_alerts(anomalies):
     alerts = []
-
     for _, row in anomalies.iterrows():
-
-        message = (
-            "AI detected an unusual combination of "
-            "sensor readings. "
-            f"Temperature: {row['Temperature']:.1f} °C, "
-            f"Vibration: {row['Vibration']:.1f} mm/s, "
-            f"Pressure: {row['Pressure']:.2f} bar."
-        )
-
         alerts.append(
             {
-                "machine_id": int(
-                    row["machine_id"]
-                ),
+                "machine_id": int(row["machine_id"]),
                 "sensor_type": "Multi-sensor",
                 "alert_type": "AI Anomaly",
                 "severity": "Warning",
-                "message": message,
-                "value": round(
-                    float(row["anomaly_score"]),
-                    6,
+                "message": (
+                    "AI detected an unusual combination of sensor readings. "
+                    f"Temperature: {row['Temperature']:.1f} °C, "
+                    f"Vibration: {row['Vibration']:.1f} mm/s, "
+                    f"Pressure: {row['Pressure']:.2f} bar."
                 ),
+                "value": round(float(row["anomaly_score"]), 6),
                 "unit": "anomaly_score",
-                "created_at": (
-                    row["recorded_at"].isoformat()
-                ),
+                "created_at": row["recorded_at"],
                 "resolved": False,
             }
         )
-
     return alerts
 
 
-# ============================================================
-# SEND AI ALERTS TO FASTAPI
-# ============================================================
+def insert_ai_alerts(alerts):
+    inserted = 0
+    skipped = 0
 
-def send_alerts_to_backend(alerts):
-    if not alerts:
-        print("\nNo anomalies detected.")
-        return
+    with engine.begin() as connection:
+        for alert in alerts:
+            created_at = alert["created_at"]
+            if hasattr(created_at, "to_pydatetime"):
+                created_at = created_at.to_pydatetime()
+            if isinstance(created_at, str):
+                created_at = datetime.fromisoformat(created_at)
 
-    url = (
-        f"{FASTAPI_URL}/api/ai-alerts"
-    )
+            exact = connection.execute(
+                text("""
+                    SELECT 1 FROM alerts
+                    WHERE machine_id = :machine_id
+                      AND alert_type = :alert_type
+                      AND created_at = :created_at
+                    LIMIT 1
+                """),
+                {
+                    "machine_id": alert["machine_id"],
+                    "alert_type": alert["alert_type"],
+                    "created_at": created_at,
+                },
+            ).first()
+            if exact:
+                skipped += 1
+                continue
 
-    print("\n================================")
-    print("Sending AI Alerts to FastAPI")
-    print("================================")
+            recent = connection.execute(
+                text("""
+                    SELECT 1 FROM alerts
+                    WHERE machine_id = :machine_id
+                      AND alert_type = 'AI Anomaly'
+                      AND created_at >= :cooldown_start
+                      AND created_at < :created_at
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """),
+                {
+                    "machine_id": alert["machine_id"],
+                    "cooldown_start": created_at - timedelta(
+                        seconds=AI_ALERT_COOLDOWN_SECONDS
+                    ),
+                    "created_at": created_at,
+                },
+            ).first()
+            if recent:
+                skipped += 1
+                continue
 
-    try:
-        response = requests.post(
-            url,
-            json=alerts,
-            timeout=10,
-        )
+            connection.execute(
+                text("""
+                    INSERT INTO alerts (
+                        machine_id, sensor_type, alert_type, severity,
+                        message, value, unit, created_at, resolved
+                    )
+                    VALUES (
+                        :machine_id, :sensor_type, :alert_type, :severity,
+                        :message, :value, :unit, :created_at, :resolved
+                    )
+                """),
+                {
+                    "machine_id": alert["machine_id"],
+                    "sensor_type": alert["sensor_type"],
+                    "alert_type": alert["alert_type"],
+                    "severity": alert["severity"],
+                    "message": alert["message"],
+                    "value": alert["value"],
+                    "unit": alert["unit"],
+                    "created_at": created_at,
+                    "resolved": alert["resolved"],
+                },
+            )
+            inserted += 1
 
-        response.raise_for_status()
+    return {"inserted": inserted, "skipped": skipped}
 
-        result = response.json()
-
-        print(
-            f"Backend status: {response.status_code}"
-        )
-
-        print(
-            f"Alerts sent: {len(alerts)}"
-        )
-
-        print(
-            f"Alerts inserted: {result['inserted']}"
-        )
-
-        print(
-            f"Alerts skipped: {result['skipped']}"
-        )
-
-    except requests.RequestException as error:
-        print(
-            "\nFailed to send AI alerts."
-        )
-
-        print(
-            f"Error: {error}"
-        )
-
-
-# ============================================================
-# MAIN
-# ============================================================
 
 if __name__ == "__main__":
-
-    print("\n================================")
-    print("Manufacturing AI - ML Pipeline")
-    print("================================")
-
-    # 1. Get live sensor data
     df = load_sensor_data()
-
-    # 2. Prepare ML features
     features = prepare_features(df)
-
+    results = detect_anomalies(features)
+    anomalies = results[results["prediction"] == -1].sort_values(
+        "anomaly_score", ascending=False
+    )
+    alerts = create_ai_alerts(anomalies)
+    insertion = insert_ai_alerts(alerts)
     print(
-        f"ML feature rows: {len(features)}"
-    )
-
-    # 3. Run Isolation Forest
-    results = detect_anomalies(
-        features
-    )
-
-    # 4. Keep only anomalies
-    anomalies = results[
-        results["prediction"] == -1
-    ].sort_values(
-        "anomaly_score",
-        ascending=False,
-    )
-
-    print("\n================================")
-    print("Isolation Forest Results")
-    print("================================")
-
-    print(
-        f"Total observations: {len(results)}"
-    )
-
-    print(
-        f"Anomalies detected: {len(anomalies)}"
-    )
-
-    print("\nTop anomalies:")
-
-    if anomalies.empty:
-        print("No anomalies detected.")
-
-    else:
-        print(
-            anomalies[
-                [
-                    "machine_id",
-                    "recorded_at",
-                    "Temperature",
-                    "Vibration",
-                    "Pressure",
-                    "anomaly_score",
-                ]
-            ]
-            .head(10)
-            .to_string(index=False)
-        )
-
-    # 5. Create alert payloads
-    ai_alerts = create_ai_alerts(
-        anomalies
-    )
-
-    print("\nAI alerts generated:", len(ai_alerts))
-
-    # 6. Automatically send to backend
-    send_alerts_to_backend(
-        ai_alerts
+        f"Anomalies detected: {len(anomalies)} | "
+        f"Alerts inserted: {insertion['inserted']} | "
+        f"Alerts skipped: {insertion['skipped']}"
     )
