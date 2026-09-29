@@ -15,7 +15,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app.database import engine
-from health_score import calculate_health_score
+from app.ml.health_score import calculate_health_score
 
 
 READINGS_PER_SENSOR = 12

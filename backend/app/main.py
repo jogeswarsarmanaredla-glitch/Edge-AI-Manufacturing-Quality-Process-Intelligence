@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import json
 import subprocess
+import sys
 
 from fastapi import FastAPI, File, UploadFile
 from fastapi.staticfiles import StaticFiles
@@ -10,6 +11,28 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from app.database import engine
+
+# ============================================================
+# ML SERVICES
+# ============================================================
+
+from app.ml.health_api import (
+    build_health_results,
+)
+
+from app.ml.combined_monitor import (
+    load_sensor_data,
+    prepare_features,
+    build_machine_insights,
+)
+
+from app.ml.anomaly import (
+    load_sensor_data as load_anomaly_sensor_data,
+    prepare_features as prepare_anomaly_features,
+    detect_anomalies,
+    create_ai_alerts as create_anomaly_alerts,
+    insert_ai_alerts,
+)
 
 
 app = FastAPI(title="Manufacturing AI API")
@@ -116,53 +139,27 @@ async def upload_inspection_image(
     }
 
 
+
 # ============================================================
 # COMPUTER VISION INSPECTION
 # ============================================================
 
-def windows_to_wsl_path(path: Path) -> str:
-    """Convert a Windows C: path into the WSL /mnt/c path."""
-    path_text = str(path).replace("\\", "/")
-
-    if len(path_text) >= 2 and path_text[1] == ":":
-        drive = path_text[0].lower()
-        return f"/mnt/{drive}{path_text[2:]}"
-
-    return path_text
-
-
-def wsl_to_windows_path(path_text: str) -> str:
-    """Convert a WSL path back into a Windows path."""
-    normalized = str(path_text).replace("\\", "/")
-
-    if normalized.startswith("/mnt/") and len(normalized) > 6:
-        drive = normalized[5].upper()
-        remainder = normalized[6:].replace("/", "\\")
-        return f"{drive}:{remainder}"
-
-    return str(path_text)
+ML_DIR = Path(__file__).resolve().parent / "ml"
 
 
 def run_cv_inspection(image_path: Path):
     """
-    Run the trained YOLO11n surface-defect model in WSL.
-    Returns structured JSON from inspect_cv.py.
+    Run the trained YOLO surface-defect model using the
+    same Python environment as the FastAPI backend.
     """
 
-    wsl_image_path = windows_to_wsl_path(image_path)
-
-    command = (
-        "source /home/jogesh-3339/.mlvenv/bin/activate && "
-        "python /mnt/c/ManufacturingAI/backend/app/ml/inspect_cv.py "
-        f"'{wsl_image_path}'"
-    )
+    script_path = ML_DIR / "inspect_cv.py"
 
     result = subprocess.run(
         [
-            "wsl",
-            "bash",
-            "-lc",
-            command,
+            sys.executable,
+            str(script_path),
+            str(image_path),
         ],
         capture_output=True,
         text=True,
@@ -182,8 +179,32 @@ def run_cv_inspection(image_path: Path):
             "Computer vision service returned no output."
         )
 
+    # Ultralytics may print informational messages before
+    # the final JSON response. Extract the final JSON line.
+    json_output = None
+
+    for line in reversed(
+        output.splitlines()
+    ):
+        line = line.strip()
+
+        if (
+            line.startswith("{")
+            and line.endswith("}")
+        ):
+            json_output = line
+            break
+
+    if json_output is None:
+        raise RuntimeError(
+            "No JSON result returned by computer vision service."
+        )
+
     try:
-        cv_data = json.loads(output)
+        cv_data = json.loads(
+            json_output
+        )
+
     except json.JSONDecodeError as error:
         raise RuntimeError(
             f"Invalid CV JSON output: {error}"
@@ -193,7 +214,7 @@ def run_cv_inspection(image_path: Path):
         raise RuntimeError(
             cv_data.get(
                 "message",
-                "Computer vision analysis failed."
+                "Computer vision analysis failed.",
             )
         )
 
@@ -1039,7 +1060,7 @@ def run_ai_analysis():
             results["prediction"] == -1
         ].sort_values("anomaly_score", ascending=False)
 
-        alerts = create_ai_alerts(anomalies)
+        alerts = create_anomaly_alerts(anomalies)
         insertion = insert_ai_alerts(alerts)
 
         with engine.connect() as connection:

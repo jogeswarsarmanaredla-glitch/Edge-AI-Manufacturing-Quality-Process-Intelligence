@@ -18,8 +18,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from app.database import engine
 from sqlalchemy import text
-
-from health_score import calculate_health_score
+from app.ml.health_score import calculate_health_score
 
 
 # ============================================================
