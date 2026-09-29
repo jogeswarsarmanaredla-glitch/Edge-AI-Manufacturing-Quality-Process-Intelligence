@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import os
 from pathlib import Path
 import json
 import subprocess
@@ -54,9 +55,10 @@ app.mount(
 AI_ALERT_COOLDOWN_SECONDS = 60
 
 
-origins = [
-    "http://localhost:5173",
-]
+origins = ["http://localhost:5173"]
+frontend_url = os.getenv("FRONTEND_URL")
+if frontend_url:
+    origins.append(frontend_url.rstrip("/"))
 
 
 app.add_middleware(
@@ -1245,3 +1247,5 @@ def simulate_sensor(
         "pressure": reading.pressure,
         "recorded_at": reading.recorded_at.isoformat(),
     }
+
+
