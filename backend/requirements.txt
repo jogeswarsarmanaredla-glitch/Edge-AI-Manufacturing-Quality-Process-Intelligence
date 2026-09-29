@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+python-multipart
+sqlalchemy
+psycopg2-binary
+python-dotenv
+pandas
+numpy
+scikit-learn
+opencv-python-headless
+ultralytics
+Pillow
