@@ -1,9 +1,23 @@
 import json
+import sys
 from pathlib import Path
 
 import pandas as pd
-import requests
 from sklearn.ensemble import IsolationForest
+
+
+# ============================================================
+# BACKEND PATH
+# ============================================================
+
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+
+from app.database import engine
+from sqlalchemy import text
 
 from health_score import calculate_health_score
 
@@ -11,8 +25,6 @@ from health_score import calculate_health_score
 # ============================================================
 # CONFIGURATION
 # ============================================================
-
-FASTAPI_URL = "http://172.19.32.1:8000"
 
 # Minimum number of complete observations needed
 # before running Isolation Forest for a machine.
@@ -36,20 +48,31 @@ MACHINE_PROFILES = {
 # ============================================================
 
 def load_sensor_data():
-    url = f"{FASTAPI_URL}/api/sensors"
+    """
+    Load sensor data directly from PostgreSQL.
 
-    response = requests.get(
-        url,
-        timeout=15,
-    )
+    This removes the dependency on the local WSL/FastAPI
+    address and makes the ML service deployment-safe.
+    """
 
-    response.raise_for_status()
+    with engine.connect() as connection:
+        result = connection.execute(
+            text("""
+                SELECT
+                    machine_id,
+                    sensor_type,
+                    value,
+                    recorded_at
+                FROM sensors
+                ORDER BY recorded_at DESC, id DESC
+            """)
+        )
 
-    data = response.json()
+        data = result.mappings().all()
 
     if not data:
         raise RuntimeError(
-            "FastAPI returned no sensor data."
+            "No sensor data found in the database."
         )
 
     df = pd.DataFrame(data)
@@ -66,6 +89,7 @@ def load_sensor_data():
 # ============================================================
 
 def prepare_features(df):
+
     features = (
         df.pivot_table(
             index=[
@@ -127,16 +151,11 @@ def prepare_features(df):
 # ============================================================
 
 def detect_latest_anomaly(machine_features):
-    """
-    Run Isolation Forest only for one machine.
-
-    This prevents machines with different normal
-    operating ranges from being compared directly.
-    """
 
     machine_features = machine_features.copy()
 
     if len(machine_features) < MIN_HISTORY:
+
         latest = machine_features.iloc[-1]
 
         return {
@@ -214,12 +233,6 @@ def detect_latest_anomaly(machine_features):
 # ============================================================
 
 def get_sensor_reason(sensor_scores):
-    """
-    Identify a meaningful sensor deviation.
-
-    Very small deviations are not treated as an explicit
-    problem in the user-facing explanation.
-    """
 
     ordered = sorted(
         sensor_scores.items(),
@@ -254,6 +267,7 @@ def build_decision(
     health_result,
     anomaly_result,
 ):
+
     health_score = health_result[
         "health_score"
     ]
@@ -297,6 +311,7 @@ def build_decision(
         anomaly_detected
         and sensor_reason
     ):
+
         explanation = (
             f"{sensor_reason} "
             "AI anomaly detection also identified "
@@ -304,21 +319,25 @@ def build_decision(
         )
 
     elif anomaly_detected:
+
         explanation = (
             "AI anomaly detection identified "
             "unusual multi-sensor behavior."
         )
 
     elif sensor_reason:
+
         explanation = sensor_reason
 
     elif status == "Healthy":
+
         explanation = (
             "Machine is operating within the "
             "calibrated operating profile."
         )
 
     else:
+
         explanation = (
             "Machine condition shows a deviation "
             "from its calibrated operating profile."
@@ -329,22 +348,26 @@ def build_decision(
     # --------------------------------------------------------
 
     if status == "Healthy":
+
         action = (
             "Continue normal monitoring."
         )
 
     elif status == "Monitor":
+
         action = (
             "Continue monitoring machine condition."
         )
 
     elif status == "Inspection Recommended":
+
         action = (
             "Inspect the machine and review "
             "recent sensor trends."
         )
 
     else:
+
         action = (
             "Inspect the machine condition "
             "before continued operation."
@@ -362,11 +385,13 @@ def build_decision(
 # ============================================================
 
 def build_machine_insights(features):
+
     insights = []
 
     for machine_id, machine_features in (
         features.groupby("machine_id")
     ):
+
         machine_id = int(machine_id)
 
         latest = (
@@ -427,6 +452,7 @@ def build_machine_insights(features):
         insights.append(
             {
                 "machine_id": machine_id,
+
                 "profile": profile,
 
                 "temperature": round(
@@ -531,6 +557,7 @@ if __name__ == "__main__":
     )
 
     try:
+
         # ----------------------------------------------------
         # 1. Load sensor data
         # ----------------------------------------------------
@@ -570,6 +597,7 @@ if __name__ == "__main__":
         for item in insights:
 
             print()
+
             print(
                 f"Machine {item['machine_id']}"
             )
@@ -605,7 +633,7 @@ if __name__ == "__main__":
             )
 
         # ----------------------------------------------------
-        # 5. JSON output for future FastAPI endpoint
+        # 5. JSON output for FastAPI
         # ----------------------------------------------------
 
         print()
