@@ -8,21 +8,25 @@ import cv2
 from ultralytics import YOLO  # type: ignore[reportMissingImports]
 
 
-MODEL_PATH = Path(
-    "/mnt/c/ManufacturingAI/backend/runs/neu_defect_baseline/weights/best.pt"
+# ============================================================
+# DEPLOYMENT-SAFE PROJECT PATHS
+# ============================================================
+
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+
+MODEL_PATH = (
+    BACKEND_DIR
+    / "runs"
+    / "neu_defect_baseline"
+    / "weights"
+    / "best.pt"
 )
 
-# Based on the validation F1-confidence curve.
-DETECTION_CONFIDENCE = 0.28
-
-# Application-level interpretation rule.
-# This is not a model metric; it is used to avoid presenting
-# lower-confidence detections as confirmed defects.
-CONFIRMED_DEFECT_CONFIDENCE = 0.50
-
-# Windows-accessible inspection output directory.
-ANNOTATED_DIR = Path(
-    "/mnt/c/ManufacturingAI/backend/uploads/inspections"
+# Directory for original and annotated inspection images
+ANNOTATED_DIR = (
+    BACKEND_DIR
+    / "uploads"
+    / "inspections"
 )
 
 ANNOTATED_DIR.mkdir(
@@ -30,6 +34,20 @@ ANNOTATED_DIR.mkdir(
     exist_ok=True,
 )
 
+
+# Based on the validation F1-confidence curve.
+DETECTION_CONFIDENCE = 0.28
+
+
+# Application-level interpretation rule.
+# This is not a model metric; it is used to avoid presenting
+# lower-confidence detections as confirmed defects.
+CONFIRMED_DEFECT_CONFIDENCE = 0.50
+
+
+# ============================================================
+# SAVE ANNOTATED IMAGE
+# ============================================================
 
 def save_annotated_image(
     result,
@@ -67,8 +85,14 @@ def save_annotated_image(
     return annotated_path
 
 
+# ============================================================
+# MAIN
+# ============================================================
+
 def main():
+
     if len(sys.argv) != 2:
+
         print(
             json.dumps(
                 {
@@ -79,11 +103,21 @@ def main():
                 }
             )
         )
+
         raise SystemExit(1)
 
-    image_path = Path(sys.argv[1])
+
+    image_path = Path(
+        sys.argv[1]
+    )
+
+
+    # ========================================================
+    # CHECK MODEL
+    # ========================================================
 
     if not MODEL_PATH.exists():
+
         print(
             json.dumps(
                 {
@@ -94,9 +128,16 @@ def main():
                 }
             )
         )
+
         raise SystemExit(1)
 
+
+    # ========================================================
+    # CHECK IMAGE
+    # ========================================================
+
     if not image_path.exists():
+
         print(
             json.dumps(
                 {
@@ -108,10 +149,24 @@ def main():
                 }
             )
         )
+
         raise SystemExit(1)
 
+
     try:
-        model = YOLO(str(MODEL_PATH))
+
+        # ====================================================
+        # LOAD YOLO MODEL
+        # ====================================================
+
+        model = YOLO(
+            str(MODEL_PATH)
+        )
+
+
+        # ====================================================
+        # RUN INFERENCE
+        # ====================================================
 
         results = model.predict(
             source=str(image_path),
@@ -122,63 +177,82 @@ def main():
             save=False,
         )
 
+
         result = results[0]
 
         detections = []
+
+
+        # ====================================================
+        # EXTRACT DETECTIONS
+        # ====================================================
 
         if (
             result.boxes is not None
             and len(result.boxes) > 0
         ):
+
             class_ids = (
-                result.boxes.cls
-                .tolist()
+                result.boxes.cls.tolist()
             )
 
             confidences = (
-                result.boxes.conf
-                .tolist()
+                result.boxes.conf.tolist()
             )
 
             boxes = (
-                result.boxes.xyxy
-                .tolist()
+                result.boxes.xyxy.tolist()
             )
+
 
             for class_id, confidence, box in zip(
                 class_ids,
                 confidences,
                 boxes,
             ):
-                class_id = int(class_id)
-                confidence = float(confidence)
+
+                class_id = int(
+                    class_id
+                )
+
+                confidence = float(
+                    confidence
+                )
+
 
                 class_name = model.names.get(
                     class_id,
                     str(class_id),
                 )
 
+
                 detections.append(
                     {
                         "class_name": class_name,
+
                         "confidence": confidence,
+
                         "confidence_percent": round(
                             confidence * 100,
                             2,
                         ),
+
                         "bbox": {
                             "x1": round(
                                 float(box[0]),
                                 2,
                             ),
+
                             "y1": round(
                                 float(box[1]),
                                 2,
                             ),
+
                             "x2": round(
                                 float(box[2]),
                                 2,
                             ),
+
                             "y2": round(
                                 float(box[3]),
                                 2,
@@ -187,92 +261,139 @@ def main():
                     }
                 )
 
-        # Always create an annotated image.
-        annotated_path = save_annotated_image(
-            result,
-            image_path,
+
+        # ====================================================
+        # ALWAYS CREATE ANNOTATED IMAGE
+        # ====================================================
+
+        annotated_path = (
+            save_annotated_image(
+                result,
+                image_path,
+            )
         )
 
-        # --------------------------------------------------------
-        # No detections above calibrated threshold
-        # --------------------------------------------------------
+
+        # ====================================================
+        # NO DETECTIONS
+        # ====================================================
 
         if not detections:
+
             output = {
                 "status": "ok",
+
                 "result": "Pass",
+
                 "confidence": None,
+
                 "defect_count": 0,
+
                 "defect_details": (
                     "No supported surface defect "
                     "detected by the CV model."
                 ),
+
                 "detections": [],
+
                 "annotated_image_path": str(
                     annotated_path
                 ),
+
                 "annotated_image_filename": (
                     annotated_path.name
                 ),
             }
 
+
+        # ====================================================
+        # DETECTIONS FOUND
+        # ====================================================
+
         else:
+
             counts = Counter(
                 detection["class_name"]
                 for detection in detections
             )
+
 
             max_confidence = max(
                 detection["confidence"]
                 for detection in detections
             )
 
+
             summary = []
 
+
             for class_name, count in counts.items():
+
                 summary.append(
                     f"{class_name} ({count})"
                 )
 
-            # ----------------------------------------------------
-            # Confirmed vs lower-confidence detection
-            # ----------------------------------------------------
+
+            # =================================================
+            # CONFIRMED VS LOWER-CONFIDENCE
+            # =================================================
 
             if (
                 max_confidence
                 >= CONFIRMED_DEFECT_CONFIDENCE
             ):
+
                 inspection_result = "Defect"
+
                 detail_prefix = "Detected: "
 
+
             else:
+
                 inspection_result = (
                     "Review Recommended"
                 )
+
                 detail_prefix = (
                     "Possible defect detected: "
                 )
 
+
             output = {
+
                 "status": "ok",
+
                 "result": inspection_result,
+
                 "confidence": round(
                     max_confidence * 100,
                     2,
                 ),
-                "defect_count": len(detections),
+
+                "defect_count": len(
+                    detections
+                ),
+
                 "defect_details": (
                     detail_prefix
                     + ", ".join(summary)
                 ),
+
                 "detections": detections,
+
                 "annotated_image_path": str(
                     annotated_path
                 ),
+
                 "annotated_image_filename": (
                     annotated_path.name
                 ),
             }
+
+
+        # ====================================================
+        # RETURN JSON
+        # ====================================================
 
         print(
             json.dumps(
@@ -281,20 +402,29 @@ def main():
             )
         )
 
+
     except Exception as error:
+
         print(
             json.dumps(
                 {
                     "status": "error",
+
                     "message": (
                         "CV inspection failed."
                     ),
+
                     "error": str(error),
                 }
             )
         )
+
         raise SystemExit(1)
 
+
+# ============================================================
+# START
+# ============================================================
 
 if __name__ == "__main__":
     main()
