@@ -160,12 +160,16 @@ def detect_latest_anomaly(machine_features):
         return {
             "anomaly": False,
             "anomaly_score": None,
-            "history_count": len(machine_features),
+            "history_count": original_history_count,
             "reason": (
                 "Insufficient history for anomaly detection."
             ),
             "latest": latest,
         }
+
+    original_history_count = len(machine_features)
+
+    machine_features = machine_features.sort_values("recorded_at").tail(250).copy()
 
     X = machine_features[
         [
@@ -176,7 +180,7 @@ def detect_latest_anomaly(machine_features):
     ]
 
     model = IsolationForest(
-        n_estimators=200,
+        n_estimators=50,
         contamination=CONTAMINATION,
         random_state=42,
     )
@@ -209,9 +213,7 @@ def detect_latest_anomaly(machine_features):
             6,
         ),
 
-        "history_count": len(
-            machine_features
-        ),
+        "history_count": original_history_count,
 
         "reason": (
             "Isolation Forest detected unusual "
