@@ -48,21 +48,37 @@ MACHINE_PROFILES = {
 
 def load_sensor_data():
     """
-    Load sensor data directly from PostgreSQL.
+    Load a recent sensor window directly from PostgreSQL.
 
-    This removes the dependency on the local WSL/FastAPI
-    address and makes the ML service deployment-safe.
+    Only the latest 300 readings per machine and sensor type
+    are loaded into application memory. This keeps the Render
+    deployment within its memory limit while preserving recent
+    sensor behavior for anomaly detection.
     """
 
     with engine.connect() as connection:
         result = connection.execute(
             text("""
+                WITH ranked AS (
+                    SELECT
+                        machine_id,
+                        sensor_type,
+                        value,
+                        recorded_at,
+                        id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY machine_id, sensor_type
+                            ORDER BY recorded_at DESC, id DESC
+                        ) AS rn
+                    FROM sensors
+                )
                 SELECT
                     machine_id,
                     sensor_type,
                     value,
                     recorded_at
-                FROM sensors
+                FROM ranked
+                WHERE rn <= 300
                 ORDER BY recorded_at DESC, id DESC
             """)
         )
@@ -153,6 +169,10 @@ def detect_latest_anomaly(machine_features):
 
     machine_features = machine_features.copy()
 
+    # Keep the number of available feature rows before
+    # reducing the working set for Isolation Forest.
+    original_history_count = len(machine_features)
+
     if len(machine_features) < MIN_HISTORY:
 
         latest = machine_features.iloc[-1]
@@ -167,9 +187,11 @@ def detect_latest_anomaly(machine_features):
             "latest": latest,
         }
 
-    original_history_count = len(machine_features)
-
-    machine_features = machine_features.sort_values("recorded_at").tail(250).copy()
+    # Only the most recent 250 complete observations are
+    # required for the actual anomaly model.
+    machine_features = machine_features.sort_values(
+        "recorded_at"
+    ).tail(250).copy()
 
     X = machine_features[
         [
