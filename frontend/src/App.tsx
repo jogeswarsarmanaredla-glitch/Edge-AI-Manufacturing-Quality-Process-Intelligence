@@ -1,5 +1,5 @@
 import {
-  BrowserRouter,
+  HashRouter,
   Navigate,
   Route,
   Routes,
@@ -18,7 +18,7 @@ import Settings from "@/pages/Settings";
 
 function App() {
   return (
-    <BrowserRouter>
+    <HashRouter>
       <Routes>
 
         {/* Shared layout */}
@@ -43,7 +43,7 @@ function App() {
         </Route>
 
       </Routes>
-    </BrowserRouter>
+    </HashRouter>
   );
 }
 
