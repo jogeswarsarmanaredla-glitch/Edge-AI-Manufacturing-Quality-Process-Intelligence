@@ -2,13 +2,6 @@
 
 An AI-powered manufacturing platform that combines machine-condition intelligence with automated visual quality inspection.
 
-## 🚀 Live Demo
-
-**Live Manufacturing AI Dashboard:**  
-
-
-> The live demo connects the deployed React frontend to the project's FastAPI backend for the current prototype demonstration.
-
 ## What the system does
 
 The platform provides two connected AI capabilities:
