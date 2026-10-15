@@ -5,7 +5,7 @@ An AI-powered manufacturing platform that combines machine-condition intelligenc
 ## 🚀 Live Demo
 
 **Live Manufacturing AI Dashboard:**  
-https://edge-ai-manufacturing-quality-process-c5yb.onrender.com
+
 
 > The live demo connects the deployed React frontend to the project's FastAPI backend for the current prototype demonstration.
 
